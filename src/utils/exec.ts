@@ -25,6 +25,22 @@ export async function execPipe(cmd: string[], input: string): Promise<void> {
   await proc.exited;
 }
 
+export async function withSpinner<T>(message: string, fn: () => Promise<T>): Promise<T> {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let i = 0;
+  const spinner = globalThis.setInterval(() => {
+    process.stdout.write(`\r${frames[i++ % frames.length]} ${message}`);
+  }, 80);
+
+  try {
+    const result = await fn();
+    return result;
+  } finally {
+    globalThis.clearInterval(spinner);
+    process.stdout.write("\r\x1b[K");
+  }
+}
+
 export function getPlatform(): "darwin" | "linux" | "windows" | "unknown" {
   const platform = process.platform;
   if (platform === "darwin") return "darwin";
