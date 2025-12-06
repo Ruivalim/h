@@ -1,7 +1,8 @@
 import { Command } from "commander";
 import { exec, execInteractive, withSpinner } from "../utils/exec";
-import { info } from "../utils/icons";
-import { select } from "../utils/prompt";
+import { info, success, error } from "../utils/icons";
+import { select, search } from "../utils/prompt";
+import { readdir } from "node:fs/promises";
 
 export function registerMiscCommands(program: Command): void {
   program
@@ -191,4 +192,57 @@ export function registerMiscCommands(program: Command): void {
         }
       }
     });
+
+  if (process.platform === "darwin") {
+    program
+      .command("unquarantine [app]")
+      .description("Remove macOS quarantine from an application")
+      .action(async (app?: string) => {
+        let appPath = app;
+
+        if (!appPath) {
+          const entries = await readdir("/Applications");
+          const apps = entries
+            .filter((name) => name.endsWith(".app"))
+            .sort((a, b) => a.localeCompare(b));
+
+          if (apps.length === 0) {
+            error("No .app files found in /Applications");
+            return;
+          }
+
+          const selected = await search<string>({
+            message: "Search for an application to unquarantine:",
+            source: async (term) => {
+              const filtered = term
+                ? apps.filter((name) => name.toLowerCase().includes(term.toLowerCase()))
+                : apps;
+              return filtered.map((name) => ({ name, value: `/Applications/${name}` }));
+            },
+          });
+
+          appPath = selected;
+        }
+
+        if (!appPath.endsWith(".app")) {
+          appPath = `${appPath}.app`;
+        }
+
+        if (!appPath.startsWith("/")) {
+          appPath = `/Applications/${appPath}`;
+        }
+
+        const file = Bun.file(appPath);
+        const exists = await file.exists();
+
+        if (!exists) {
+          error(`Application not found: ${appPath}`);
+          return;
+        }
+
+        info(`Removing quarantine from ${appPath}...`);
+        await execInteractive(["xattr", "-dr", "com.apple.quarantine", appPath]);
+        success(`Quarantine removed from ${appPath}`);
+      });
+  }
 }
