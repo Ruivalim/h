@@ -110,10 +110,11 @@ export function registerMiscCommands(program: Command): void {
           });
           await prettierResult.exited;
 
-          const changed = await exec(["git", "diff", "--name-only"]);
+          const changed = await exec(["git", "diff", "--name-only", "--", ...files]);
           if (changed) {
+            const changedFiles = changed.split("\n").filter(Boolean);
             console.log("\x1b[33m!\x1b[0m Prettier modified files, re-staging...");
-            await exec(["git", "add", ...files]);
+            await exec(["git", "add", ...changedFiles]);
           }
         }
 
