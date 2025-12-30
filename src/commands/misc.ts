@@ -143,14 +143,68 @@ export function registerMiscCommands(program: Command): void {
         }
       }
 
-      const diff = await exec(["git", "diff", "--cached"]);
+      // Filter out files that are never important for commit messages
+      const ignoredPatterns = [
+        ":(exclude)*.lock",
+        ":(exclude)yarn.lock",
+        ":(exclude)package-lock.json",
+        ":(exclude)bun.lockb",
+        ":(exclude)pnpm-lock.yaml",
+        ":(exclude)composer.lock",
+        ":(exclude)Gemfile.lock",
+        ":(exclude)poetry.lock",
+        ":(exclude)Cargo.lock",
+        ":(exclude)*.min.js",
+        ":(exclude)*.min.css",
+        ":(exclude)dist/*",
+        ":(exclude)build/*",
+        ":(exclude)*.map",
+        ":(exclude)*.bundle.js",
+        ":(exclude)*.chunk.js",
+      ];
+
+      // Get diff excluding ignored files
+      const diff = await exec(["git", "diff", "--cached", "--", ".", ...ignoredPatterns]);
+
+      const maxChars = 50000; // ~12k tokens, safe for most models
+
+      let prompt;
+      if (diff.length > maxChars) {
+        // Large commit: use statistics only
+        const stats = await exec([
+          "git",
+          "diff",
+          "--cached",
+          "--stat",
+          "--",
+          ".",
+          ...ignoredPatterns,
+        ]);
+        const summary = await exec([
+          "git",
+          "diff",
+          "--cached",
+          "--shortstat",
+          "--",
+          ".",
+          ...ignoredPatterns,
+        ]);
+
+        prompt = `Based on these git statistics, write a concise commit message (1-2 sentences) using Git Conventions. Output ONLY the commit message, nothing else:
+
+Summary: ${summary}
+
+Files changed:
+${stats}`;
+      } else {
+        // Normal commit: use full diff
+        prompt = `Based on this git diff, write a concise commit message (1-2 sentences) using Git Conventions. Output ONLY the commit message, nothing else:
+
+${diff}`;
+      }
 
       const message = await withSpinner("Generating commit message...", () =>
-        exec([
-          "claude",
-          "-p",
-          `Based on this git diff, write a concise commit message (1-2 sentences) using Git Conventions. Output ONLY the commit message, nothing else:\n\n${diff}`,
-        ])
+        exec(["claude", "-p", prompt])
       );
 
       let finalMessage = message;
