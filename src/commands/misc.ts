@@ -248,6 +248,185 @@ ${diff}`;
       }
     });
 
+  program
+    .command("branch-diff")
+    .description("Generate a diff report between two branches using Claude")
+    .action(async () => {
+      // Get all branches (local and remote)
+      const branchOutput = await exec(["git", "branch", "-a", "--format=%(refname:short)"]);
+      if (!branchOutput) {
+        error("No branches found. Are you in a git repository?");
+        return;
+      }
+
+      const branches = branchOutput
+        .split("\n")
+        .filter(Boolean)
+        .filter((b) => !b.includes("HEAD"))
+        .map((b) => b.replace("origin/", ""))
+        .filter((value, index, self) => self.indexOf(value) === index) // Remove duplicates
+        .sort();
+
+      if (branches.length < 2) {
+        error("Need at least 2 branches to compare.");
+        return;
+      }
+
+      // Get current branch as default
+      const currentBranch = (await exec(["git", "branch", "--show-current"])).trim();
+
+      console.log("\n\x1b[1mSelect branches to compare:\x1b[0m\n");
+
+      // Select source branch (base)
+      const sourceBranch = await search<string>({
+        message: "Source branch (base):",
+        source: async (term) => {
+          const filtered = term
+            ? branches.filter((b) => b.toLowerCase().includes(term.toLowerCase()))
+            : branches;
+          return filtered.map((b) => ({
+            name: b === currentBranch ? `${b} (current)` : b,
+            value: b,
+          }));
+        },
+      });
+
+      if (!sourceBranch) {
+        console.log("Cancelled.");
+        return;
+      }
+
+      // Filter out selected source branch for target selection
+      const targetBranches = branches.filter((b) => b !== sourceBranch);
+
+      // Select target branch (compare)
+      const targetBranch = await search<string>({
+        message: "Target branch (compare):",
+        source: async (term) => {
+          const filtered = term
+            ? targetBranches.filter((b) => b.toLowerCase().includes(term.toLowerCase()))
+            : targetBranches;
+          return filtered.map((b) => ({
+            name: b === currentBranch ? `${b} (current)` : b,
+            value: b,
+          }));
+        },
+      });
+
+      if (!targetBranch) {
+        console.log("Cancelled.");
+        return;
+      }
+
+      console.log(
+        `\n\x1b[34m→\x1b[0m Comparing \x1b[33m${sourceBranch}\x1b[0m → \x1b[33m${targetBranch}\x1b[0m\n`
+      );
+
+      // Get commit log between branches
+      const commits = await exec(["git", "log", "--oneline", `${sourceBranch}..${targetBranch}`]);
+
+      // Get diff statistics
+      const stats = await exec(["git", "diff", "--stat", `${sourceBranch}...${targetBranch}`]);
+
+      const shortstat = await exec([
+        "git",
+        "diff",
+        "--shortstat",
+        `${sourceBranch}...${targetBranch}`,
+      ]);
+
+      if (!commits && !stats) {
+        info("No differences found between the branches.");
+        return;
+      }
+
+      // Get the actual diff (limited for large diffs)
+      const diff = await exec([
+        "git",
+        "diff",
+        `${sourceBranch}...${targetBranch}`,
+        "--",
+        ".",
+        ":(exclude)*.lock",
+        ":(exclude)yarn.lock",
+        ":(exclude)package-lock.json",
+        ":(exclude)bun.lockb",
+        ":(exclude)pnpm-lock.yaml",
+        ":(exclude)*.min.js",
+        ":(exclude)*.min.css",
+        ":(exclude)dist/*",
+        ":(exclude)build/*",
+        ":(exclude)*.map",
+      ]);
+
+      const maxChars = 50000;
+      const diffContent = diff.length > maxChars ? stats : diff;
+      const isLargeDiff = diff.length > maxChars;
+
+      const prompt = `Analyze the following git diff between branch "${sourceBranch}" and "${targetBranch}" and generate a comprehensive report in Portuguese (Brazil).
+
+${isLargeDiff ? "Note: The diff was too large, showing statistics only." : ""}
+
+**Commits in ${targetBranch} not in ${sourceBranch}:**
+${commits || "No commits found"}
+
+**Summary:**
+${shortstat || "No changes"}
+
+**${isLargeDiff ? "Files changed" : "Full diff"}:**
+${diffContent || "No differences"}
+
+Generate a report with:
+1. **Resumo Geral**: A brief overview of what changed
+2. **Principais Mudanças**: List the most important changes grouped by category (features, fixes, refactoring, etc.)
+3. **Arquivos Impactados**: Key files that were modified and why
+4. **Pontos de Atenção**: Any potential issues, breaking changes, or things to review carefully
+5. **Recomendações**: Suggestions for code review or testing
+
+Format the output in Markdown.`;
+
+      const report = await withSpinner("Generating diff report with Claude...", () =>
+        exec(["claude", "-p", prompt])
+      );
+
+      console.log(
+        "\n\x1b[1m═══════════════════════════════════════════════════════════════\x1b[0m"
+      );
+      console.log("\x1b[1m                      BRANCH DIFF REPORT\x1b[0m");
+      console.log(`\x1b[1m                   ${sourceBranch} → ${targetBranch}\x1b[0m`);
+      console.log(
+        "\x1b[1m═══════════════════════════════════════════════════════════════\x1b[0m\n"
+      );
+      console.log(report);
+
+      // Option to save the report
+      const action = await select<string>({
+        message: "What would you like to do?",
+        choices: [
+          { name: "Done", value: "done" },
+          { name: "Save to file", value: "save" },
+          { name: "Copy to clipboard", value: "copy" },
+        ],
+      });
+
+      if (action === "save") {
+        const timestamp = Date.now();
+        const filename = `branch-diff-${sourceBranch.replace(/\//g, "-")}-${targetBranch.replace(/\//g, "-")}-${timestamp}.md`;
+        await Bun.write(filename, report);
+        success(`Report saved to ${filename}`);
+      } else if (action === "copy") {
+        if (process.platform === "darwin") {
+          const proc = Bun.spawn(["pbcopy"], { stdin: "pipe" });
+          proc.stdin.write(report);
+          proc.stdin.end();
+          await proc.exited;
+          success("Report copied to clipboard!");
+        } else {
+          error("Clipboard copy is only supported on macOS currently.");
+        }
+      }
+    });
+
   if (process.platform === "darwin") {
     program
       .command("unquarantine [app]")

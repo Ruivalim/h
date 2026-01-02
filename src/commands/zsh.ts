@@ -205,6 +205,7 @@ _h() {
     'edit-nvim:Edit neovim config'
     'edit-zsh:Edit zsh config'
     'commit:Generate commit message with AI'
+    'branch-diff:Generate diff report between branches with AI'
     'unquarantine:Remove macOS quarantine from app'
     'z:Zsh config manager'
   )
