@@ -1,8 +1,10 @@
 import { Command } from "commander";
-import { exec, execInteractive, withSpinner } from "../utils/exec";
-import { info, success, error } from "../utils/icons";
+import { exec, execInteractive, withSpinner, getPlatform } from "../utils/exec";
+import { info, success, error, warn } from "../utils/icons";
 import { select, search } from "../utils/prompt";
 import { readdir } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
+import { confirm } from "@inquirer/prompts";
 
 export function registerMiscCommands(program: Command): void {
   program
@@ -479,4 +481,134 @@ Format the output in Markdown.`;
         success(`Quarantine removed from ${appPath}`);
       });
   }
+
+  program
+    .command("upgrade")
+    .alias("update")
+    .description("Upgrade h CLI to the latest version")
+    .action(async () => {
+      const H_BIN = `${process.env.HOME}/.local/bin/h`;
+      const H_VERSION_FILE = `${process.env.HOME}/.local/bin/.h_version`;
+      const H_REPO = "Ruivalim/h";
+
+      // Detect platform
+      const platform = getPlatform();
+      let artifact = "";
+
+      if (platform === "darwin") {
+        artifact = "h-darwin-arm64";
+      } else if (platform === "linux") {
+        artifact = "h-linux-x64";
+      } else {
+        error(`Unsupported platform: ${platform}`);
+        return;
+      }
+
+      try {
+        // Get current version
+        const currentVersion = existsSync(H_VERSION_FILE)
+          ? readFileSync(H_VERSION_FILE, "utf-8").trim()
+          : "unknown";
+
+        info(`Current version: ${currentVersion}`);
+
+        // Get latest version from GitHub
+        const latestResponse = await withSpinner("Checking for updates...", () =>
+          exec(["curl", "-s", `https://api.github.com/repos/${H_REPO}/releases/latest`])
+        );
+
+        const latest = JSON.parse(latestResponse);
+        const latestVersion = latest.tag_name;
+
+        if (!latestVersion) {
+          error("Could not fetch latest version from GitHub");
+          return;
+        }
+
+        info(`Latest version: ${latestVersion}`);
+
+        if (currentVersion === latestVersion) {
+          success("h CLI is already up to date!");
+          return;
+        }
+
+        console.log(`\nUpdate available: ${currentVersion} → ${latestVersion}\n`);
+
+        const confirmed = await confirm({
+          message: "Would you like to upgrade?",
+          default: true,
+        });
+
+        if (!confirmed) {
+          info("Upgrade cancelled");
+          return;
+        }
+
+        // Download and install new version
+        const downloadUrl = `https://github.com/${H_REPO}/releases/download/${latestVersion}/${artifact}`;
+
+        await withSpinner(`Downloading ${latestVersion}...`, async () => {
+          await exec(["curl", "-fsSL", downloadUrl, "-o", H_BIN]);
+        });
+
+        chmodSync(H_BIN, 0o755);
+        writeFileSync(H_VERSION_FILE, latestVersion);
+
+        success(`✓ h CLI upgraded to ${latestVersion}!`);
+        info("\nRun 'h --version' to verify the new version");
+      } catch (err) {
+        error("Failed to upgrade h CLI");
+        console.error(err);
+      }
+    });
+
+  program
+    .command("uninstall")
+    .description("Uninstall h CLI from your system")
+    .action(async () => {
+      const H_BIN = `${process.env.HOME}/.local/bin/h`;
+      const H_VERSION_FILE = `${process.env.HOME}/.local/bin/.h_version`;
+
+      console.log("\n⚠️  This will remove h CLI from your system\n");
+
+      const confirmed = await confirm({
+        message: "Are you sure you want to uninstall h CLI?",
+        default: false,
+      });
+
+      if (!confirmed) {
+        info("Uninstall cancelled");
+        return;
+      }
+
+      try {
+        let removed = false;
+
+        if (existsSync(H_BIN)) {
+          await exec(["rm", H_BIN]);
+          success("Removed binary: ~/.local/bin/h");
+          removed = true;
+        }
+
+        if (existsSync(H_VERSION_FILE)) {
+          await exec(["rm", H_VERSION_FILE]);
+          success("Removed version file: ~/.local/bin/.h_version");
+          removed = true;
+        }
+
+        if (removed) {
+          console.log();
+          success("h CLI has been uninstalled successfully!");
+          console.log();
+          warn("Note: The zsh function wrapper is still in ~/.config/zsh/functions.zsh");
+          info("It will auto-install h CLI again if you run 'h' command");
+          info("To remove it permanently, edit ~/.config/zsh/functions.zsh");
+        } else {
+          info("h CLI is not installed (no files found)");
+        }
+      } catch (err) {
+        error("Failed to uninstall h CLI");
+        console.error(err);
+      }
+    });
 }

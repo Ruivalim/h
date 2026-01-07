@@ -209,6 +209,9 @@ _h() {
     'unquarantine:Remove macOS quarantine from app'
     'z:Zsh config manager'
     'release:Release a new version with hooks'
+    'upgrade:Upgrade h CLI to latest version'
+    'update:Upgrade h CLI to latest version'
+    'uninstall:Uninstall h CLI from system'
   )
 
   k_subcommands=(
