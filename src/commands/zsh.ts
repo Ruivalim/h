@@ -208,6 +208,7 @@ _h() {
     'branch-diff:Generate diff report between branches with AI'
     'unquarantine:Remove macOS quarantine from app'
     'z:Zsh config manager'
+    'release:Release a new version with hooks'
   )
 
   k_subcommands=(

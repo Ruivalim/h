@@ -1,5 +1,6 @@
 {
   "name": "h",
+  "version": "0.2.0",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
@@ -11,7 +12,8 @@
     "build": "bun build src/index.ts --compile --outfile dist/h",
     "install-cli": "./install.sh",
     "lint": "eslint src",
-    "format": "prettier --write src"
+    "format": "prettier --write src",
+    "release": "bun run src/index.ts release"
   },
   "devDependencies": {
     "@types/bun": "latest",

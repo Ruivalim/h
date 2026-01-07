@@ -14,9 +14,6 @@ jobs:
           - os: macos-latest
             target: darwin-arm64
             artifact: h-darwin-arm64
-          - os: macos-13
-            target: darwin-x64
-            artifact: h-darwin-x64
           - os: ubuntu-latest
             target: linux-x64
             artifact: h-linux-x64
@@ -68,7 +65,6 @@ jobs:
         with:
           files: |
             dist/h-darwin-arm64/h-darwin-arm64
-            dist/h-darwin-x64/h-darwin-x64
             dist/h-linux-x64/h-linux-x64
           generate_release_notes: true
         env:

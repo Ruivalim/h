@@ -1,0 +1,447 @@
+import { Command } from "commander";
+import { select, input, confirm } from "@inquirer/prompts";
+import { ExitPromptError } from "@inquirer/core";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import { exec, execInteractive, withSpinner } from "../utils/exec";
+import { success, error, warn, info } from "../utils/icons";
+import chalk from "chalk";
+
+interface ReleaseConfig {
+  release: {
+    versionFile: string;
+    preRelease: string[];
+    postRelease: string[];
+  };
+}
+
+const DEFAULT_HRC = {
+  release: {
+    versionFile: "package.json",
+    preRelease: [
+      "# Add your pre-release commands here",
+      "# Example: npm run lint",
+      "# Example: npm run test",
+      "# Example: npm run build",
+    ],
+    postRelease: [
+      "# Add your post-release commands here",
+      "# Example: npm publish",
+      "# Example: docker push",
+    ],
+  },
+};
+
+async function loadConfig(): Promise<ReleaseConfig | null> {
+  const configPath = ".hrc";
+
+  if (!existsSync(configPath)) {
+    console.log(chalk.yellow("\n⚠ No .hrc file found in current directory\n"));
+
+    const createDefault = await confirm({
+      message: "Would you like to create a default .hrc file?",
+      default: true,
+    });
+
+    if (createDefault) {
+      try {
+        writeFileSync(configPath, JSON.stringify(DEFAULT_HRC, null, 2) + "\n");
+        success("Created .hrc file with default configuration");
+        console.log(chalk.cyan("\nPlease edit .hrc to configure your release hooks:"));
+        console.log(
+          chalk.gray("  - preRelease: commands to run before commit (lint, test, build)")
+        );
+        console.log(chalk.gray("  - postRelease: commands to run after push (publish, deploy)\n"));
+
+        const editNow = await confirm({
+          message: "Open .hrc in editor now?",
+          default: true,
+        });
+
+        if (editNow) {
+          await execInteractive(["nvim", configPath]);
+          console.log();
+        }
+
+        // Reload config after creation/editing
+        const content = readFileSync(configPath, "utf-8");
+        return JSON.parse(content);
+      } catch (err) {
+        error("Failed to create .hrc file");
+        return null;
+      }
+    } else {
+      info("Continuing without .hrc configuration");
+      return null;
+    }
+  }
+
+  try {
+    const content = readFileSync(configPath, "utf-8");
+    return JSON.parse(content);
+  } catch (err) {
+    error("Failed to parse .hrc file");
+    return null;
+  }
+}
+
+function getCurrentVersion(versionFile: string): string | null {
+  if (!existsSync(versionFile)) {
+    error(`Version file not found: ${versionFile}`);
+    return null;
+  }
+
+  try {
+    const content = readFileSync(versionFile, "utf-8");
+    const pkg = JSON.parse(content);
+    return pkg.version || null;
+  } catch (err) {
+    error(`Failed to read version from ${versionFile}`);
+    return null;
+  }
+}
+
+function incrementVersion(version: string, type: "major" | "minor" | "patch"): string {
+  const parts = version.split(".").map(Number);
+
+  switch (type) {
+    case "major":
+      parts[0]++;
+      parts[1] = 0;
+      parts[2] = 0;
+      break;
+    case "minor":
+      parts[1]++;
+      parts[2] = 0;
+      break;
+    case "patch":
+      parts[2]++;
+      break;
+  }
+
+  return parts.join(".");
+}
+
+function updateVersionInFile(versionFile: string, newVersion: string): boolean {
+  try {
+    const content = readFileSync(versionFile, "utf-8");
+    const pkg = JSON.parse(content);
+    pkg.version = newVersion;
+    writeFileSync(versionFile, JSON.stringify(pkg, null, 2) + "\n");
+    return true;
+  } catch (err) {
+    error(`Failed to update version in ${versionFile}`);
+    return false;
+  }
+}
+
+function filterHooks(hooks: string[]): string[] {
+  return hooks.filter((hook) => !hook.trim().startsWith("#") && hook.trim().length > 0);
+}
+
+async function getCurrentBranch(): Promise<string | null> {
+  try {
+    const branch = await exec(["git", "rev-parse", "--abbrev-ref", "HEAD"]);
+    return branch || null;
+  } catch (err) {
+    error("Failed to detect current git branch");
+    return null;
+  }
+}
+
+async function runHook(command: string, description: string): Promise<boolean> {
+  // Skip comments and empty lines
+  if (command.trim().startsWith("#") || command.trim().length === 0) {
+    return true;
+  }
+
+  try {
+    info(`Running: ${command}`);
+    // Split command into program and args
+    const parts = command.split(" ");
+    await execInteractive(parts);
+    success(`${description} completed`);
+    return true;
+  } catch (err) {
+    error(`${description} failed`);
+    return false;
+  }
+}
+
+async function getCommitMessage(newVersion: string, useAI: boolean): Promise<string> {
+  if (useAI) {
+    try {
+      info("Generating commit message with Claude...");
+
+      // Get git diff
+      const diff = await exec(["git", "diff", "--staged"]);
+
+      if (!diff) {
+        warn("No staged changes found for AI analysis");
+        return await input({
+          message: "Enter commit message:",
+          default: `chore: release v${newVersion}`,
+        });
+      }
+
+      // Use Claude to generate commit message
+      const prompt = `Generate a concise git commit message for this release version ${newVersion}.
+
+Changes:
+${diff}
+
+Provide only the commit message, following conventional commits format (e.g., "chore: release v${newVersion}" or "feat: release v${newVersion} with new features").`;
+
+      const message = await exec(["claude", "-p", prompt]);
+
+      if (message) {
+        success("AI-generated commit message");
+        console.log(`\n${message}\n`);
+
+        const useGenerated = await confirm({
+          message: "Use this commit message?",
+          default: true,
+        });
+
+        if (useGenerated) {
+          return message;
+        }
+      }
+    } catch (err) {
+      warn("Failed to generate AI commit message, falling back to manual input");
+    }
+  }
+
+  return await input({
+    message: "Enter commit message:",
+    default: `chore: release v${newVersion}`,
+  });
+}
+
+export function registerReleaseCommands(program: Command): void {
+  program
+    .command("release")
+    .description("Release a new version (with pre/post hooks from .hrc)")
+    .action(async () => {
+      let versionFile = "package.json";
+      let originalVersion: string | null = null;
+      let versionWasChanged = false;
+
+      // Graceful shutdown handler
+      const cleanup = () => {
+        if (versionWasChanged && originalVersion && versionFile) {
+          console.log();
+          warn("\n⚠ Release cancelled - reverting version changes...");
+          updateVersionInFile(versionFile, originalVersion);
+          info(`Version reverted to ${originalVersion}`);
+        }
+        console.log();
+        process.exit(0);
+      };
+
+      // Catch Ctrl+C and other exit signals
+      process.on("SIGINT", cleanup);
+      process.on("SIGTERM", cleanup);
+
+      try {
+        console.log("\n🚀 Release Process\n");
+
+        // Detect current branch
+        const currentBranch = await getCurrentBranch();
+        if (!currentBranch) {
+          error("Could not detect current git branch");
+          return;
+        }
+
+        // Load config
+        const config = await loadConfig();
+        if (!config) {
+          info("Using default configuration (package.json)");
+        }
+
+        versionFile = config?.release.versionFile || "package.json";
+        const preReleaseHooks = config?.release.preRelease || [];
+        const postReleaseHooks = config?.release.postRelease || [];
+
+        // Get current version
+        const currentVersion = getCurrentVersion(versionFile);
+        if (!currentVersion) {
+          return;
+        }
+
+        originalVersion = currentVersion;
+
+        console.log(`Current version: ${currentVersion}\n`);
+
+        // Ask which part to increment
+        const versionType = await select({
+          message: "Which version to increment?",
+          choices: [
+            {
+              name: `Patch (${incrementVersion(currentVersion, "patch")}) - Bug fixes`,
+              value: "patch",
+            },
+            {
+              name: `Minor (${incrementVersion(currentVersion, "minor")}) - New features`,
+              value: "minor",
+            },
+            {
+              name: `Major (${incrementVersion(currentVersion, "major")}) - Breaking changes`,
+              value: "major",
+            },
+            {
+              name: `Skip (${currentVersion}) - Version already updated manually`,
+              value: "skip",
+            },
+          ],
+        });
+
+        if (!versionType) return;
+
+        let newVersion = currentVersion;
+
+        if (versionType !== "skip") {
+          newVersion = incrementVersion(currentVersion, versionType as "major" | "minor" | "patch");
+          console.log(`\n→ New version will be: ${newVersion}\n`);
+
+          // Update version first (needed for pre-release hooks that might build)
+          info(`Updating version in ${versionFile}...`);
+          if (!updateVersionInFile(versionFile, newVersion)) {
+            return;
+          }
+          versionWasChanged = true; // Mark that version was changed
+          success(`Version updated to ${newVersion}`);
+        } else {
+          console.log(`\n→ Keeping current version: ${currentVersion}\n`);
+          info("Skipping version update - using current version");
+        }
+
+        // Run pre-release hooks (lint, format, build, etc)
+        if (preReleaseHooks.length > 0) {
+          console.log("\n📋 Running pre-release hooks:\n");
+          for (const hook of preReleaseHooks) {
+            if (!(await runHook(hook, hook))) {
+              error("\nPre-release hook failed. Aborting release.");
+              // Revert version change
+              updateVersionInFile(versionFile, currentVersion);
+              warn("Version reverted to " + currentVersion);
+              return;
+            }
+          }
+          console.log();
+        }
+
+        // Stage changes (needed for AI analysis)
+        try {
+          await withSpinner("Staging changes for commit", async () => {
+            await exec(["git", "add", "."]);
+          });
+          success("Changes staged");
+        } catch (err) {
+          error("Failed to stage changes");
+          console.error(err);
+          return;
+        }
+
+        // Ask for commit message
+        const useAI = await confirm({
+          message: "Use AI (Claude) to generate commit message?",
+          default: false,
+        });
+
+        const commitMessage = await getCommitMessage(newVersion, useAI);
+
+        // Confirm before proceeding
+        const activePreHooks = filterHooks(preReleaseHooks);
+        const activePostHooks = filterHooks(postReleaseHooks);
+
+        console.log("\n📋 Release Summary:");
+        console.log(`  Version: ${currentVersion} → ${newVersion}`);
+        console.log(`  Branch: ${currentBranch}`);
+        console.log(`  Commit: ${commitMessage}`);
+        if (activePreHooks.length > 0) {
+          console.log(`  Pre-release hooks: ${activePreHooks.length} completed`);
+        }
+        if (activePostHooks.length > 0) {
+          console.log(`  Post-release hooks: ${activePostHooks.length} to run`);
+        }
+
+        const confirmed = await confirm({
+          message: "\nProceed with release?",
+          default: true,
+        });
+
+        if (!confirmed) {
+          warn("\nRelease cancelled");
+          // Revert version change
+          updateVersionInFile(versionFile, currentVersion);
+          warn("Version reverted to " + currentVersion);
+          return;
+        }
+
+        console.log("\n🔧 Starting release process...\n");
+
+        // Git operations
+        try {
+          await withSpinner("Creating commit", async () => {
+            await exec(["git", "commit", "-m", commitMessage]);
+          });
+          success(`Commit created: ${commitMessage}`);
+
+          await withSpinner(`Creating tag v${newVersion}`, async () => {
+            await exec(["git", "tag", `v${newVersion}`]);
+          });
+          success(`Tag created: v${newVersion}`);
+
+          await withSpinner(`Pushing to remote (${currentBranch})`, async () => {
+            await exec(["git", "push", "origin", currentBranch]);
+          });
+          success(`Pushed to ${currentBranch}`);
+
+          await withSpinner(`Pushing tag v${newVersion}`, async () => {
+            await exec(["git", "push", "origin", `v${newVersion}`]);
+          });
+          success(`Tag pushed: v${newVersion}`);
+        } catch (err) {
+          error("Git operations failed");
+          console.error(err);
+          return;
+        }
+
+        // Run post-release hooks
+        if (postReleaseHooks.length > 0) {
+          console.log("\n📋 Running post-release hooks:\n");
+          for (const hook of postReleaseHooks) {
+            await runHook(hook, hook);
+          }
+        }
+
+        success(`\nRelease v${newVersion} completed successfully! 🎉\n`);
+
+        // Release completed successfully - version change is permanent
+        versionWasChanged = false;
+      } catch (err: any) {
+        // Handle user cancellation (Ctrl+C or ESC)
+        if (err instanceof ExitPromptError) {
+          cleanup();
+          return;
+        }
+
+        // Other errors
+        console.log();
+        error("Release failed with error:");
+        console.error(err);
+
+        // Revert version if it was changed
+        if (versionWasChanged && originalVersion) {
+          console.log();
+          warn("Reverting version changes...");
+          updateVersionInFile(versionFile, originalVersion);
+          info(`Version reverted to ${originalVersion}`);
+        }
+      } finally {
+        // Remove signal handlers
+        process.off("SIGINT", cleanup);
+        process.off("SIGTERM", cleanup);
+      }
+    });
+}
