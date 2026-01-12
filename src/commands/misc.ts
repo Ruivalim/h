@@ -61,6 +61,46 @@ export function registerMiscCommands(program: Command): void {
   }
 
   program
+    .command("ip")
+    .description("Show your public IP address and info")
+    .action(async () => {
+      try {
+        console.log();
+
+        // Get IPv4
+        const ipv4Promise = exec(["curl", "-s", "-4", "api.ipify.org"]).catch(() => "N/A");
+
+        // Get IPv6
+        const ipv6Promise = exec(["curl", "-s", "-6", "api64.ipify.org"]).catch(() => "N/A");
+
+        // Get detailed info
+        const infoPromise = exec(["curl", "-s", "ipinfo.io"]).catch(() => null);
+
+        const [ipv4, ipv6, infoRaw] = await Promise.all([ipv4Promise, ipv6Promise, infoPromise]);
+
+        console.log("\x1b[1m📡 Public IP Information\x1b[0m\n");
+
+        console.log(`\x1b[34mIPv4:\x1b[0m ${ipv4}`);
+        console.log(`\x1b[34mIPv6:\x1b[0m ${ipv6}`);
+
+        if (infoRaw) {
+          const info = JSON.parse(infoRaw);
+          console.log();
+          console.log(
+            `\x1b[34mLocation:\x1b[0m ${info.city || "N/A"}, ${info.region || "N/A"}, ${info.country || "N/A"}`
+          );
+          console.log(`\x1b[34mOrg:\x1b[0m ${info.org || "N/A"}`);
+          console.log(`\x1b[34mTimezone:\x1b[0m ${info.timezone || "N/A"}`);
+        }
+
+        console.log();
+      } catch (err) {
+        error("Failed to fetch IP information");
+        console.error(err);
+      }
+    });
+
+  program
     .command("edit-nvim")
     .description("Edit neovim config")
     .action(async () => {
