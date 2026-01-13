@@ -2,11 +2,13 @@ import { Command } from "commander";
 import { select, input, confirm } from "@inquirer/prompts";
 import { ExitPromptError } from "@inquirer/core";
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { exec, execInteractive, withSpinner } from "../utils/exec";
+import { exec, execInteractive, withSpinner, commandExists } from "../utils/exec";
 import { success, error, warn, info } from "../utils/icons";
 import chalk from "chalk";
 import { generateAIResponse } from "../utils/ai";
 import { loadCommitlintConfig } from "../utils/commitlint";
+import { loadConfig as loadHConfig } from "../utils/config";
+import { generateReleaseNotes, getRelevantDiffs, updateChangelog } from "../utils/release-notes";
 
 interface ReleaseConfig {
   release: {
@@ -176,18 +178,35 @@ async function getCommitMessage(
 ): Promise<string> {
   if (useAI) {
     try {
-      info("Generating commit message with AI...");
+      const hConfig = loadHConfig();
+      const providerName = hConfig.ai.provider === "claude" ? "Claude" : "Ollama";
+      info(`Generating commit message with ${providerName}...`);
 
-      // Get git diff
-      const diff = await exec(["git", "diff", "--staged"]);
+      // Get the latest tag
+      let lastTag = "";
+      try {
+        lastTag = await exec(["git", "describe", "--tags", "--abbrev=0"]);
+      } catch (err) {
+        // No tags found, get all commits
+      }
 
-      if (!diff) {
-        warn("No staged changes found for AI analysis");
+      // Get commit history since last tag
+      const commitRange = lastTag ? `${lastTag}..HEAD` : "HEAD";
+      const commitLog = await exec(["git", "log", commitRange, "--oneline"]);
+
+      if (!commitLog) {
+        warn("No commits found since last tag");
         return await input({
           message: "Enter commit message:",
           default: `chore: release v${newVersion}`,
         });
       }
+
+      // Get file statistics since last tag
+      const fileStats = await exec(["git", "diff", "--stat", lastTag ? lastTag : "HEAD~1", "HEAD"]);
+
+      // Get current staged diff for context (if any)
+      const stagedDiff = await exec(["git", "diff", "--staged", "--shortstat"]);
 
       // Load commitlint config if available
       const commitlintConfig = await loadCommitlintConfig();
@@ -196,12 +215,20 @@ async function getCommitMessage(
         : "";
 
       // Use AI to generate commit message
-      const prompt = `Generate a concise git commit message for this release version ${newVersion}.
+      const prompt = `Generate a concise release commit message for version ${newVersion}.
 
-Changes:
-${diff}
+Base your message on the following commit history${lastTag ? ` since ${lastTag}` : ""}:
 
-Provide only the commit message, following conventional commits format (e.g., "chore: release v${newVersion}" or "feat: release v${newVersion} with new features").${commitlintInstructions}`;
+Commits:
+${commitLog}
+
+Files changed:
+${fileStats}
+
+${stagedDiff ? `Current staged changes: ${stagedDiff}` : ""}
+
+Provide only the commit message, following conventional commits format (e.g., "chore: release v${newVersion}" or "feat: release v${newVersion} with new features").
+Summarize the main changes and improvements in 1-2 sentences.${commitlintInstructions}`;
 
       // Show prompt in debug mode
       if (debug) {
@@ -388,8 +415,10 @@ export function registerReleaseCommands(program: Command): void {
         }
 
         // Ask for commit message
+        const hConfig = loadHConfig();
+        const providerName = hConfig.ai.provider === "claude" ? "Claude" : "Ollama";
         const useAI = await confirm({
-          message: "Use AI (Claude) to generate commit message?",
+          message: `Use AI (${providerName}) to generate commit message?`,
           default: false,
         });
 
@@ -427,16 +456,98 @@ export function registerReleaseCommands(program: Command): void {
 
         // Git operations
         try {
+          // Step 1: Create commit (WITHOUT tag yet)
           await withSpinner("Creating commit", async () => {
             await exec(["git", "commit", "-m", commitMessage]);
           });
           success(`Commit created: ${commitMessage}`);
 
+          // Step 2: Ask about release notes
+          const generateNotes = await confirm({
+            message: "Generate detailed release notes?",
+            default: true,
+          });
+
+          let releaseNotesContent = "";
+
+          if (generateNotes) {
+            console.log();
+            const hConfig = loadHConfig();
+            const providerName = hConfig.ai.provider === "claude" ? "Claude" : "Ollama";
+
+            // Get the last tag for comparison
+            let lastTag = "";
+            try {
+              lastTag = await exec(["git", "describe", "--tags", "--abbrev=0", "HEAD~1"]);
+            } catch (err) {
+              // No previous tag, use first commit
+              lastTag = await exec(["git", "rev-list", "--max-parents=0", "HEAD"]);
+            }
+
+            // Get commit history
+            const commitRange = lastTag ? `${lastTag}..HEAD` : "HEAD";
+            const commitLog = await exec(["git", "log", commitRange, "--oneline"]);
+
+            // Get file stats
+            const fileStats = await exec([
+              "git",
+              "diff",
+              "--stat",
+              lastTag ? lastTag : "HEAD~1",
+              "HEAD",
+            ]);
+
+            // Get relevant diffs
+            const diffs = await getRelevantDiffs(lastTag || "HEAD~1", "HEAD");
+
+            // Generate release notes with AI
+            releaseNotesContent = await withSpinner(
+              `Generating release notes with ${providerName}...`,
+              () => generateReleaseNotes(newVersion, lastTag, commitLog, diffs, fileStats)
+            );
+
+            // Preview release notes
+            console.log("\n" + chalk.bold("📝 Generated Release Notes:"));
+            console.log(chalk.gray("─".repeat(80)));
+            console.log(releaseNotesContent);
+            console.log(chalk.gray("─".repeat(80)) + "\n");
+
+            const useNotes = await confirm({
+              message: "Add these release notes to CHANGELOG.md?",
+              default: true,
+            });
+
+            if (useNotes) {
+              // Read existing CHANGELOG if it exists
+              const changelogPath = "CHANGELOG.md";
+              let existingChangelog = "";
+              if (existsSync(changelogPath)) {
+                existingChangelog = readFileSync(changelogPath, "utf-8");
+              }
+
+              // Update CHANGELOG
+              const updatedChangelog = updateChangelog(
+                newVersion,
+                releaseNotesContent,
+                existingChangelog
+              );
+              writeFileSync(changelogPath, updatedChangelog);
+              success("CHANGELOG.md updated");
+
+              // Stage and amend commit
+              await exec(["git", "add", "CHANGELOG.md"]);
+              await exec(["git", "commit", "--amend", "--no-edit"]);
+              success("Commit amended with CHANGELOG.md");
+            }
+          }
+
+          // Step 3: NOW create the tag (after changelog is included)
           await withSpinner(`Creating tag v${newVersion}`, async () => {
             await exec(["git", "tag", `v${newVersion}`]);
           });
           success(`Tag created: v${newVersion}`);
 
+          // Step 4: Push everything
           await withSpinner(`Pushing to remote (${currentBranch})`, async () => {
             await exec(["git", "push", "origin", currentBranch]);
           });
@@ -446,6 +557,39 @@ export function registerReleaseCommands(program: Command): void {
             await exec(["git", "push", "origin", `v${newVersion}`]);
           });
           success(`Tag pushed: v${newVersion}`);
+
+          // Step 5: Create GitHub Release if gh CLI is available
+          if (releaseNotesContent && (await commandExists("gh"))) {
+            console.log();
+            const createGHRelease = await confirm({
+              message: "Create GitHub Release?",
+              default: true,
+            });
+
+            if (createGHRelease) {
+              try {
+                await withSpinner("Creating GitHub Release", async () => {
+                  // Create a temporary file with release notes
+                  const tmpFile = `/tmp/release-notes-${newVersion}.md`;
+                  writeFileSync(tmpFile, releaseNotesContent);
+
+                  await exec([
+                    "gh",
+                    "release",
+                    "create",
+                    `v${newVersion}`,
+                    "--title",
+                    `Release v${newVersion}`,
+                    "--notes-file",
+                    tmpFile,
+                  ]);
+                });
+                success(`GitHub Release created: v${newVersion}`);
+              } catch (err) {
+                warn("Failed to create GitHub Release (you can do it manually later)");
+              }
+            }
+          }
         } catch (err) {
           error("Git operations failed");
           console.error(err);

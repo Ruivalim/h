@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
 import { confirm } from "@inquirer/prompts";
 import { generateAIResponse } from "../utils/ai";
 import { loadCommitlintConfig } from "../utils/commitlint";
+import { loadConfig } from "../utils/config";
 
 export function registerMiscCommands(program: Command): void {
   program
@@ -118,7 +119,7 @@ export function registerMiscCommands(program: Command): void {
 
   program
     .command("commit")
-    .description("Generate a commit message using Claude Code")
+    .description("Generate a commit message using AI")
     .option("--debug", "Show AI prompt for debugging")
     .action(async (options) => {
       let stagedFiles = await exec(["git", "diff", "--cached", "--name-only"]);
@@ -295,7 +296,10 @@ ${diff}`;
         console.log("\x1b[90m" + "=".repeat(80) + "\x1b[0m\n");
       }
 
-      const message = await withSpinner("Generating commit message...", () =>
+      const config = loadConfig();
+      const providerName = config.ai.provider === "claude" ? "Claude" : "Ollama";
+
+      const message = await withSpinner(`Generating commit message with ${providerName}...`, () =>
         generateAIResponse(prompt)
       );
 
@@ -342,7 +346,7 @@ ${diff}`;
 
   program
     .command("branch-diff")
-    .description("Generate a diff report between two branches using Claude")
+    .description("Generate a diff report between two branches using AI")
     .option("--debug", "Show AI prompt for debugging")
     .action(async (options) => {
       // Get all branches (local and remote)
@@ -486,7 +490,10 @@ Format the output in Markdown.`;
         console.log("\x1b[90m" + "=".repeat(80) + "\x1b[0m\n");
       }
 
-      const report = await withSpinner("Generating diff report with AI...", () =>
+      const config = loadConfig();
+      const providerName = config.ai.provider === "claude" ? "Claude" : "Ollama";
+
+      const report = await withSpinner(`Generating diff report with ${providerName}...`, () =>
         generateAIResponse(prompt)
       );
 
