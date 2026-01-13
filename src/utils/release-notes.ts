@@ -119,6 +119,23 @@ export async function getRelevantDiffs(
 }
 
 /**
+ * Get GitHub repository info from git remote
+ */
+async function getGitHubRepo(): Promise<string | null> {
+  try {
+    const remote = await exec(["git", "remote", "get-url", "origin"]);
+    // Parse GitHub URL (supports both HTTPS and SSH)
+    const match = remote.match(/github\.com[:/](.+?)(?:\.git)?$/);
+    if (match) {
+      return match[1]; // Returns "owner/repo"
+    }
+  } catch (err) {
+    // Not a git repo or no origin
+  }
+  return null;
+}
+
+/**
  * Generate detailed release notes using AI
  */
 export async function generateReleaseNotes(
@@ -154,6 +171,14 @@ export async function generateReleaseNotes(
     }
   }
 
+  // Get GitHub repo for compare link
+  const githubRepo = await getGitHubRepo();
+  let changelogSection = "";
+
+  if (githubRepo && lastTag) {
+    changelogSection = `\n## 📝 Full Changelog\nSee all changes: https://github.com/${githubRepo}/compare/${lastTag}...v${version}`;
+  }
+
   const prompt = `Generate comprehensive release notes for version ${version}.
 
 You are creating release notes for a software release. Analyze the changes and create a well-structured markdown document.
@@ -183,12 +208,13 @@ Please generate release notes in the following format:
 ## 🔧 Technical Changes
 [Developer-relevant changes like refactoring, dependency updates, etc.]
 
-## 📝 Full Changelog
-[Link to compare view would go here]
+Keep it clear, concise, and user-friendly. Use emojis sparingly and professionally.
+Do NOT include a "Full Changelog" section - I will add it automatically.`;
 
-Keep it clear, concise, and user-friendly. Use emojis sparingly and professionally.`;
+  const aiNotes = await generateAIResponse(prompt);
 
-  return await generateAIResponse(prompt);
+  // Add changelog link at the end if available
+  return aiNotes + changelogSection;
 }
 
 /**

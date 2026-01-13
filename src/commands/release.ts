@@ -195,7 +195,25 @@ async function getCommitMessage(
       const commitLog = await exec(["git", "log", commitRange, "--oneline"]);
 
       if (!commitLog) {
-        warn("No commits found since last tag");
+        console.log();
+        warn("No commits found since last tag" + (lastTag ? ` (${lastTag})` : ""));
+        console.log();
+        console.log("This usually means:");
+        console.log("  • You just created a release and haven't made new commits yet");
+        console.log("  • You're trying to re-release the same version");
+        console.log();
+
+        const shouldContinue = await confirm({
+          message: "Continue with release anyway?",
+          default: false,
+        });
+
+        if (!shouldContinue) {
+          console.log("\nRelease cancelled. Make some commits first!");
+          process.exit(0);
+        }
+
+        // Allow manual commit message since there's no changes to analyze
         return await input({
           message: "Enter commit message:",
           default: `chore: release v${newVersion}`,
@@ -463,82 +481,97 @@ export function registerReleaseCommands(program: Command): void {
           success(`Commit created: ${commitMessage}`);
 
           // Step 2: Ask about release notes
-          const generateNotes = await confirm({
-            message: "Generate detailed release notes?",
-            default: true,
-          });
-
           let releaseNotesContent = "";
 
-          if (generateNotes) {
-            console.log();
-            const hConfig = loadHConfig();
-            const providerName = hConfig.ai.provider === "claude" ? "Claude" : "Ollama";
-
-            // Get the last tag for comparison
-            let lastTag = "";
+          // Get the last tag for comparison
+          let lastTagForNotes = "";
+          try {
+            lastTagForNotes = await exec(["git", "describe", "--tags", "--abbrev=0", "HEAD~1"]);
+          } catch (err) {
+            // No previous tag, use first commit
             try {
-              lastTag = await exec(["git", "describe", "--tags", "--abbrev=0", "HEAD~1"]);
-            } catch (err) {
-              // No previous tag, use first commit
-              lastTag = await exec(["git", "rev-list", "--max-parents=0", "HEAD"]);
+              lastTagForNotes = await exec(["git", "rev-list", "--max-parents=0", "HEAD"]);
+            } catch {
+              lastTagForNotes = "";
             }
+          }
 
-            // Get commit history
-            const commitRange = lastTag ? `${lastTag}..HEAD` : "HEAD";
-            const commitLog = await exec(["git", "log", commitRange, "--oneline"]);
+          // Check if there are commits to generate notes from
+          const commitRangeForNotes = lastTagForNotes ? `${lastTagForNotes}..HEAD` : "HEAD";
+          const hasCommitsForNotes = await exec(["git", "log", commitRangeForNotes, "--oneline"]);
 
-            // Get file stats
-            const fileStats = await exec([
-              "git",
-              "diff",
-              "--stat",
-              lastTag ? lastTag : "HEAD~1",
-              "HEAD",
-            ]);
-
-            // Get relevant diffs
-            const diffs = await getRelevantDiffs(lastTag || "HEAD~1", "HEAD");
-
-            // Generate release notes with AI
-            releaseNotesContent = await withSpinner(
-              `Generating release notes with ${providerName}...`,
-              () => generateReleaseNotes(newVersion, lastTag, commitLog, diffs, fileStats)
-            );
-
-            // Preview release notes
-            console.log("\n" + chalk.bold("📝 Generated Release Notes:"));
-            console.log(chalk.gray("─".repeat(80)));
-            console.log(releaseNotesContent);
-            console.log(chalk.gray("─".repeat(80)) + "\n");
-
-            const useNotes = await confirm({
-              message: "Add these release notes to CHANGELOG.md?",
+          if (hasCommitsForNotes) {
+            const generateNotes = await confirm({
+              message: "Generate detailed release notes?",
               default: true,
             });
 
-            if (useNotes) {
-              // Read existing CHANGELOG if it exists
-              const changelogPath = "CHANGELOG.md";
-              let existingChangelog = "";
-              if (existsSync(changelogPath)) {
-                existingChangelog = readFileSync(changelogPath, "utf-8");
-              }
+            if (generateNotes) {
+              console.log();
+              const hConfig = loadHConfig();
+              const providerName = hConfig.ai.provider === "claude" ? "Claude" : "Ollama";
 
-              // Update CHANGELOG
-              const updatedChangelog = updateChangelog(
-                newVersion,
-                releaseNotesContent,
-                existingChangelog
+              // Get file stats
+              const fileStats = await exec([
+                "git",
+                "diff",
+                "--stat",
+                lastTagForNotes ? lastTagForNotes : "HEAD~1",
+                "HEAD",
+              ]);
+
+              // Get relevant diffs
+              const diffs = await getRelevantDiffs(lastTagForNotes || "HEAD~1", "HEAD");
+
+              // Generate release notes with AI
+              releaseNotesContent = await withSpinner(
+                `Generating release notes with ${providerName}...`,
+                () =>
+                  generateReleaseNotes(
+                    newVersion,
+                    lastTagForNotes,
+                    hasCommitsForNotes,
+                    diffs,
+                    fileStats
+                  )
               );
-              writeFileSync(changelogPath, updatedChangelog);
-              success("CHANGELOG.md updated");
 
-              // Stage and amend commit
-              await exec(["git", "add", "CHANGELOG.md"]);
-              await exec(["git", "commit", "--amend", "--no-edit"]);
-              success("Commit amended with CHANGELOG.md");
+              // Preview release notes
+              console.log("\n" + chalk.bold("📝 Generated Release Notes:"));
+              console.log(chalk.gray("─".repeat(80)));
+              console.log(releaseNotesContent);
+              console.log(chalk.gray("─".repeat(80)) + "\n");
+
+              const useNotes = await confirm({
+                message: "Add these release notes to CHANGELOG.md?",
+                default: true,
+              });
+
+              if (useNotes) {
+                // Read existing CHANGELOG if it exists
+                const changelogPath = "CHANGELOG.md";
+                let existingChangelog = "";
+                if (existsSync(changelogPath)) {
+                  existingChangelog = readFileSync(changelogPath, "utf-8");
+                }
+
+                // Update CHANGELOG
+                const updatedChangelog = updateChangelog(
+                  newVersion,
+                  releaseNotesContent,
+                  existingChangelog
+                );
+                writeFileSync(changelogPath, updatedChangelog);
+                success("CHANGELOG.md updated");
+
+                // Stage and amend commit
+                await exec(["git", "add", "CHANGELOG.md"]);
+                await exec(["git", "commit", "--amend", "--no-edit"]);
+                success("Commit amended with CHANGELOG.md");
+              }
             }
+          } else {
+            info("No commits since last tag, skipping release notes generation");
           }
 
           // Step 3: NOW create the tag (after changelog is included)
