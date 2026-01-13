@@ -5,6 +5,8 @@ import { select, search } from "../utils/prompt";
 import { readdir } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
 import { confirm } from "@inquirer/prompts";
+import { generateAIResponse } from "../utils/ai";
+import { loadCommitlintConfig } from "../utils/commitlint";
 
 export function registerMiscCommands(program: Command): void {
   program
@@ -117,16 +119,50 @@ export function registerMiscCommands(program: Command): void {
   program
     .command("commit")
     .description("Generate a commit message using Claude Code")
-    .action(async () => {
-      const stagedFiles = await exec(["git", "diff", "--cached", "--name-only"]);
+    .option("--debug", "Show AI prompt for debugging")
+    .action(async (options) => {
+      let stagedFiles = await exec(["git", "diff", "--cached", "--name-only"]);
+
       if (!stagedFiles) {
-        console.log("No staged changes found. Stage your changes with 'git add' first.");
-        return;
+        // No staged changes, ask if user wants to stage all
+        const shouldStageAll = await confirm({
+          message: "No staged changes found. Run 'git add .' to stage all changes?",
+          default: true,
+        });
+
+        if (!shouldStageAll) {
+          console.log("Aborted. Stage your changes with 'git add' first.");
+          return;
+        }
+
+        // Stage all changes
+        await exec(["git", "add", "."]);
+        info("Staged all changes");
+
+        // Get staged files again
+        stagedFiles = await exec(["git", "diff", "--cached", "--name-only"]);
+
+        if (!stagedFiles) {
+          error("No changes to commit");
+          return;
+        }
       }
 
-      const files = stagedFiles.split("\n").filter(Boolean);
+      const allFiles = stagedFiles.split("\n").filter(Boolean);
+
+      // Filter out deleted files (they don't exist on disk anymore)
+      // Use --diff-filter=d to exclude deleted files for linting
+      const existingFiles = await exec([
+        "git",
+        "diff",
+        "--cached",
+        "--diff-filter=d",
+        "--name-only",
+      ]);
+      const files = existingFiles ? existingFiles.split("\n").filter(Boolean) : [];
+
       console.log("\n\x1b[1mStaged files:\x1b[0m");
-      files.forEach((f) => console.log(`  • ${f}`));
+      allFiles.forEach((f) => console.log(`  • ${f}`));
       console.log();
 
       const packageJsonExists = await Bun.file("package.json").exists();
@@ -208,6 +244,12 @@ export function registerMiscCommands(program: Command): void {
       // Get diff excluding ignored files
       const diff = await exec(["git", "diff", "--cached", "--", ".", ...ignoredPatterns]);
 
+      // Load commitlint config if available
+      const commitlintConfig = await loadCommitlintConfig();
+      const commitlintInstructions = commitlintConfig
+        ? `\n\nIMPORTANT - Follow this commitlint configuration:\n${commitlintConfig}`
+        : "";
+
       const maxChars = 50000; // ~12k tokens, safe for most models
 
       let prompt;
@@ -232,7 +274,7 @@ export function registerMiscCommands(program: Command): void {
           ...ignoredPatterns,
         ]);
 
-        prompt = `Based on these git statistics, write a concise commit message (1-2 sentences) using Git Conventions. Output ONLY the commit message, nothing else:
+        prompt = `Based on these git statistics, write a concise commit message (1-2 sentences) using Git Conventions. Output ONLY the commit message, nothing else:${commitlintInstructions}
 
 Summary: ${summary}
 
@@ -240,13 +282,21 @@ Files changed:
 ${stats}`;
       } else {
         // Normal commit: use full diff
-        prompt = `Based on this git diff, write a concise commit message (1-2 sentences) using Git Conventions. Output ONLY the commit message, nothing else:
+        prompt = `Based on this git diff, write a concise commit message (1-2 sentences) using Git Conventions. Output ONLY the commit message, nothing else:${commitlintInstructions}
 
 ${diff}`;
       }
 
+      // Show prompt in debug mode
+      if (options.debug) {
+        console.log("\n\x1b[1m🐛 Debug - AI Prompt:\x1b[0m");
+        console.log("\x1b[90m" + "=".repeat(80) + "\x1b[0m");
+        console.log(prompt);
+        console.log("\x1b[90m" + "=".repeat(80) + "\x1b[0m\n");
+      }
+
       const message = await withSpinner("Generating commit message...", () =>
-        exec(["claude", "-p", prompt])
+        generateAIResponse(prompt)
       );
 
       let finalMessage = message;
@@ -293,7 +343,8 @@ ${diff}`;
   program
     .command("branch-diff")
     .description("Generate a diff report between two branches using Claude")
-    .action(async () => {
+    .option("--debug", "Show AI prompt for debugging")
+    .action(async (options) => {
       // Get all branches (local and remote)
       const branchOutput = await exec(["git", "branch", "-a", "--format=%(refname:short)"]);
       if (!branchOutput) {
@@ -427,8 +478,16 @@ Generate a report with:
 
 Format the output in Markdown.`;
 
-      const report = await withSpinner("Generating diff report with Claude...", () =>
-        exec(["claude", "-p", prompt])
+      // Show prompt in debug mode
+      if (options.debug) {
+        console.log("\n\x1b[1m🐛 Debug - AI Prompt:\x1b[0m");
+        console.log("\x1b[90m" + "=".repeat(80) + "\x1b[0m");
+        console.log(prompt);
+        console.log("\x1b[90m" + "=".repeat(80) + "\x1b[0m\n");
+      }
+
+      const report = await withSpinner("Generating diff report with AI...", () =>
+        generateAIResponse(prompt)
       );
 
       console.log(

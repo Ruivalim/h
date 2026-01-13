@@ -5,6 +5,8 @@ import { existsSync, readFileSync, writeFileSync } from "fs";
 import { exec, execInteractive, withSpinner } from "../utils/exec";
 import { success, error, warn, info } from "../utils/icons";
 import chalk from "chalk";
+import { generateAIResponse } from "../utils/ai";
+import { loadCommitlintConfig } from "../utils/commitlint";
 
 interface ReleaseConfig {
   release: {
@@ -167,10 +169,14 @@ async function runHook(command: string, description: string): Promise<boolean> {
   }
 }
 
-async function getCommitMessage(newVersion: string, useAI: boolean): Promise<string> {
+async function getCommitMessage(
+  newVersion: string,
+  useAI: boolean,
+  debug: boolean = false
+): Promise<string> {
   if (useAI) {
     try {
-      info("Generating commit message with Claude...");
+      info("Generating commit message with AI...");
 
       // Get git diff
       const diff = await exec(["git", "diff", "--staged"]);
@@ -183,15 +189,29 @@ async function getCommitMessage(newVersion: string, useAI: boolean): Promise<str
         });
       }
 
-      // Use Claude to generate commit message
+      // Load commitlint config if available
+      const commitlintConfig = await loadCommitlintConfig();
+      const commitlintInstructions = commitlintConfig
+        ? `\n\nIMPORTANT - Follow this commitlint configuration:\n${commitlintConfig}`
+        : "";
+
+      // Use AI to generate commit message
       const prompt = `Generate a concise git commit message for this release version ${newVersion}.
 
 Changes:
 ${diff}
 
-Provide only the commit message, following conventional commits format (e.g., "chore: release v${newVersion}" or "feat: release v${newVersion} with new features").`;
+Provide only the commit message, following conventional commits format (e.g., "chore: release v${newVersion}" or "feat: release v${newVersion} with new features").${commitlintInstructions}`;
 
-      const message = await exec(["claude", "-p", prompt]);
+      // Show prompt in debug mode
+      if (debug) {
+        console.log("\n\x1b[1m🐛 Debug - AI Prompt:\x1b[0m");
+        console.log("\x1b[90m" + "=".repeat(80) + "\x1b[0m");
+        console.log(prompt);
+        console.log("\x1b[90m" + "=".repeat(80) + "\x1b[0m\n");
+      }
+
+      const message = await generateAIResponse(prompt);
 
       if (message) {
         success("AI-generated commit message");
@@ -221,7 +241,8 @@ export function registerReleaseCommands(program: Command): void {
   program
     .command("release")
     .description("Release a new version (with pre/post hooks from .hrc)")
-    .action(async () => {
+    .option("--debug", "Show AI prompt for debugging")
+    .action(async (options) => {
       let versionFile = "package.json";
       let originalVersion: string | null = null;
       let versionWasChanged = false;
@@ -330,16 +351,40 @@ export function registerReleaseCommands(program: Command): void {
           console.log();
         }
 
-        // Stage changes (needed for AI analysis)
-        try {
-          await withSpinner("Staging changes for commit", async () => {
-            await exec(["git", "add", "."]);
-          });
-          success("Changes staged");
-        } catch (err) {
-          error("Failed to stage changes");
-          console.error(err);
+        // Check if there are changes to stage
+        const stagedChanges = await exec(["git", "diff", "--cached", "--name-only"]);
+        const unstagedChanges = await exec(["git", "diff", "--name-only"]);
+
+        if (!stagedChanges && !unstagedChanges) {
+          error("No changes to release");
           return;
+        }
+
+        // If there are unstaged changes, ask if user wants to stage them
+        if (unstagedChanges) {
+          const shouldStageAll = await confirm({
+            message: "There are unstaged changes. Stage all changes for release?",
+            default: true,
+          });
+
+          if (!shouldStageAll) {
+            info("Release cancelled. Stage your changes manually first.");
+            return;
+          }
+
+          // Stage changes (needed for AI analysis)
+          try {
+            await withSpinner("Staging changes for commit", async () => {
+              await exec(["git", "add", "."]);
+            });
+            success("Changes staged");
+          } catch (err) {
+            error("Failed to stage changes");
+            console.error(err);
+            return;
+          }
+        } else if (stagedChanges) {
+          info("Using already staged changes");
         }
 
         // Ask for commit message
@@ -348,7 +393,7 @@ export function registerReleaseCommands(program: Command): void {
           default: false,
         });
 
-        const commitMessage = await getCommitMessage(newVersion, useAI);
+        const commitMessage = await getCommitMessage(newVersion, useAI, options.debug);
 
         // Confirm before proceeding
         const activePreHooks = filterHooks(preReleaseHooks);
