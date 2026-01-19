@@ -13,6 +13,14 @@ export interface HConfig {
     checkOnStartup: boolean;
     lastChecked?: string;
   };
+  dots?: {
+    sourceDir: string;
+    targetDir: string;
+    ignoredPatterns: string[];
+    autoPush: boolean;
+    checkInterval: number; // hours, 0 = disabled
+    lastChecked?: string; // ISO timestamp
+  };
 }
 
 const DEFAULT_CONFIG: HConfig = {
@@ -21,6 +29,22 @@ const DEFAULT_CONFIG: HConfig = {
   },
   updates: {
     checkOnStartup: true,
+  },
+  dots: {
+    sourceDir: "~/.local/share/chezmoi",
+    targetDir: "~",
+    ignoredPatterns: [
+      ".DS_Store",
+      "*.swp",
+      "*.swo",
+      "*~",
+      ".git",
+      "node_modules",
+      "__pycache__",
+      ".cache",
+    ],
+    autoPush: false,
+    checkInterval: 24, // check every 24 hours
   },
 };
 
@@ -67,11 +91,21 @@ export function saveConfig(config: HConfig): void {
 
 export function updateConfig(updates: Partial<HConfig>): void {
   const config = loadConfig();
-  const newConfig = {
+  const newConfig: HConfig = {
     ...config,
     ...updates,
     ai: { ...config.ai, ...(updates.ai || {}) },
     updates: { ...config.updates, ...(updates.updates || {}) },
   };
+
+  // Handle dots separately to maintain type safety
+  if (updates.dots || config.dots) {
+    newConfig.dots = {
+      ...DEFAULT_CONFIG.dots!,
+      ...(config.dots || {}),
+      ...(updates.dots || {}),
+    };
+  }
+
   saveConfig(newConfig);
 }

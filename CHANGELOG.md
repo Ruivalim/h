@@ -3,6 +3,60 @@
 All notable changes to this project will be documented in this file.
 
 
+
+## [0.6.0] - 2026-01-19
+
+Now I have a complete picture. Let me generate the release notes.
+
+# Release v0.6.0
+
+## 🎉 Highlights
+
+This release introduces a comprehensive **Dotfiles Manager** (`h dots`) - a chezmoi-compatible system for managing your dotfiles across machines. It also includes an **Interactive Configuration Editor** and complete project documentation.
+
+## ✨ What's New
+
+### Dotfiles Manager (`h dots`)
+- **`h dots add <path>`** - Add files or directories to your dotfiles repo with interactive selection
+- **`h dots apply`** - Apply dotfiles from repo to home directory with diff preview
+- **`h dots sync`** - Bidirectional sync with conflict resolution (home ↔ repo)
+- **`h dots status`** - View modified, missing, and in-sync files at a glance
+- **`h dots diff [file]`** - Show differences between repo and home
+- **`h dots list`** - List all managed dotfiles with status indicators
+- **`h dots rm <path>`** - Remove files from dotfiles management
+
+**Key Features:**
+- Chezmoi-compatible naming conventions (`dot_`, `private_`, `executable_` prefixes)
+- Auto-commit and push support for seamless backups
+- Periodic sync checks on CLI startup (configurable interval)
+- Automatic permission handling (private files get 600, executables get 755)
+- Configurable ignore patterns for common files (.DS_Store, *.swp, etc.)
+
+### Interactive Configuration Editor (`h config edit`)
+- New menu-driven configuration interface
+- Configure AI provider, update settings, and dotfiles options in one place
+- Easily manage ignored patterns for dotfiles
+
+### Documentation
+- Added comprehensive documentation in `docs/`:
+  - Installation guide with all methods and requirements
+  - Complete commands reference
+  - Architecture overview
+  - Roadmap and planned features
+  - Known issues and improvements
+
+## 🔧 Technical Changes
+
+- Extended `HConfig` type with dotfiles configuration schema
+- Added `updateConfig()` utility for partial config updates
+- Integrated dotfiles startup check into main CLI flow
+- Improved README with quick start guide and feature overview
+## 📝 Full Changelog
+See all changes: https://github.com/Ruivalim/h/compare/push...v0.6.0
+
+---
+
+
 ## [0.5.0] - 2026-01-13
 
 ## 🎉 Highlights

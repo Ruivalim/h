@@ -10,7 +10,7 @@ export async function generateAIResponse(prompt: string): Promise<string> {
 
   if (config.ai.provider === "claude") {
     // Use Claude Code CLI
-    return await exec(["claude", "-p", prompt]);
+    return await exec(["claude", "--no-session-persistence", "-p", prompt]);
   } else if (config.ai.provider === "ollama") {
     // Use Ollama
     const model = config.ai.ollama?.model || "llama3.2";
