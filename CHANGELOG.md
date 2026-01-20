@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 
 
 
+
+## [0.6.2] - 2026-01-20
+
+## 🎉 Highlights
+
+This release significantly improves the dotfiles conflict resolution workflow by introducing configurable diff tool support and an interactive menu system. Users can now choose their preferred diff/merge tool (vimdiff, neovim, meld, VS Code, etc.) and resolve conflicts more efficiently with a streamlined interface.
+
+## ✨ What's New
+
+### Configurable Diff Tool Support
+- Added new `diffTool` configuration option accessible via `h config`
+- Supports popular diff tools out of the box:
+  - vimdiff (vim)
+  - nvim -d (neovim)
+  - meld
+  - opendiff (macOS FileMerge)
+  - VS Code (`code --diff --wait`)
+  - Custom commands
+- Auto-detects a sensible default based on your `$EDITOR` environment variable
+
+### Improved Conflict Resolution Workflow
+- New interactive menu when encountering file conflicts during `dots sync`, `dots apply`, and `dots diff`
+- Options to view inline diff, open in external diff tool, apply changes, or skip—all from a single menu
+- External diff tool integration allows reviewing changes in your preferred editor before deciding
+- Menu loops back after viewing diffs, letting you inspect changes multiple times before committing to an action
+
+## 🔧 Technical Changes
+
+- Refactored path resolution in `dots add` and `dots rm` to properly handle relative paths from current directory
+- Added validation that paths must be inside home directory
+- Extracted diff tool detection and spawning into reusable utility functions (`detectDefaultDiffTool`, `getDiffToolArgs`, `openExternalDiff`)
+## 📝 Full Changelog
+See all changes: https://github.com/Ruivalim/h/compare/v0.6.1...v0.6.2
+
+---
+
+
 ## [0.6.1] - 2026-01-20
 
 ## 🎉 Highlights
