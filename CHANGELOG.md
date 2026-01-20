@@ -7,6 +7,41 @@ All notable changes to this project will be documented in this file.
 
 
 
+
+## [0.6.4] - 2026-01-20
+
+## 🎉 Highlights
+
+This release adds a raw output mode to the `dots diff` command, making it easier to integrate dotfile status checks into scripts and automation workflows. The new `--raw` flag outputs a machine-readable format similar to `git status --porcelain`.
+
+## ✨ What's New
+
+- **Raw output mode for `dots diff`**: Use `--raw` flag to get machine-readable output with status prefixes:
+  - `M` prefix for modified files (content differs between repo and home)
+  - `D` prefix for deleted files (exists in repo but missing from home)
+  
+  Example usage:
+  ```bash
+  h dots diff --raw
+  # Output:
+  # M .zshrc
+  # D .gitconfig
+  ```
+
+## 🐛 Bug Fixes
+
+No bug fixes in this release.
+
+## 🔧 Technical Changes
+
+- Updated `dotsDiff` function signature to accept an options object for extensibility
+- Raw mode bypasses the detailed diff output, only listing files with their status codes
+## 📝 Full Changelog
+See all changes: https://github.com/Ruivalim/h/compare/v0.6.3...v0.6.4
+
+---
+
+
 ## [0.6.3] - 2026-01-20
 
 ## 🎉 Highlights
