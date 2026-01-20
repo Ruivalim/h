@@ -465,15 +465,20 @@ async function dotsApply(): Promise<void> {
   }
 
   console.log();
-  info("Applying dotfiles...");
-  console.log();
+  info("Scanning for changes...");
 
   const sourceFiles = listFilesRecursively(sourceDir);
-  let appliedCount = 0;
-  let skippedCount = 0;
+
+  // Collect files that need to be applied
+  const filesToApply: Array<{
+    sourceFile: string;
+    targetName: string;
+    sourcePath: string;
+    targetPath: string;
+    isNew: boolean;
+  }> = [];
 
   for (const sourceFile of sourceFiles) {
-    // Skip .git directory
     if (sourceFile.startsWith(".git/") || sourceFile === ".git") continue;
 
     const targetName = toTargetName(sourceFile);
@@ -482,52 +487,99 @@ async function dotsApply(): Promise<void> {
 
     const isDifferent = await filesAreDifferent(sourcePath, targetPath);
 
-    if (!isDifferent) {
-      skippedCount++;
-      continue;
+    if (isDifferent) {
+      filesToApply.push({
+        sourceFile,
+        targetName,
+        sourcePath,
+        targetPath,
+        isNew: !existsSync(targetPath),
+      });
     }
+  }
 
-    // Show diff if target exists and is different
-    if (existsSync(targetPath)) {
-      const sourceContent = await readFile(sourcePath);
-      const targetContent = await readFile(targetPath);
+  if (filesToApply.length === 0) {
+    console.log();
+    success("All dotfiles are already in sync!");
+    console.log();
+    return;
+  }
 
-      console.log(chalk.yellow(`\nFile differs: ${targetName}`));
+  console.log();
+  console.log(chalk.bold(`Found ${filesToApply.length} file(s) to apply:`));
+  console.log();
+
+  // Show what would be applied
+  for (const file of filesToApply) {
+    const icon = file.isNew ? chalk.green("+ new") : chalk.yellow("~ modified");
+    console.log(`  ${icon}  ${file.targetName}`);
+  }
+  console.log();
+
+  // Let user select which files to apply
+  const selectedFiles = await checkbox({
+    message: "Select files to apply:",
+    choices: filesToApply.map((f) => ({
+      name: `${f.isNew ? "(new)" : "(modified)"} ${f.targetName}`,
+      value: f.targetName,
+      checked: true,
+    })),
+    pageSize: 15,
+  });
+
+  if (selectedFiles.length === 0) {
+    info("No files selected");
+    console.log();
+    return;
+  }
+
+  console.log();
+  let appliedCount = 0;
+
+  for (const file of filesToApply) {
+    if (!selectedFiles.includes(file.targetName)) continue;
+
+    // Show diff for modified files before applying
+    if (!file.isNew) {
+      const sourceContent = await readFile(file.sourcePath);
+      const targetContent = await readFile(file.targetPath);
+
+      console.log(chalk.yellow(`\nFile: ${file.targetName}`));
       console.log(
         generateDiff(
           targetContent,
           sourceContent,
-          `~/${targetName} (current)`,
-          `repo/${sourceFile}`
+          `~/${file.targetName} (current)`,
+          `repo/${file.sourceFile}`
         )
       );
       console.log();
 
       const shouldOverwrite = await confirm({
-        message: `Overwrite ~/${targetName}?`,
-        default: false,
+        message: `Apply changes to ~/${file.targetName}?`,
+        default: true,
       });
 
       if (!shouldOverwrite) {
-        skippedCount++;
+        info(`Skipped: ${file.targetName}`);
         continue;
       }
     }
 
     // Create parent directories if needed
-    const targetParentDir = dirname(targetPath);
+    const targetParentDir = dirname(file.targetPath);
     if (!existsSync(targetParentDir)) {
       mkdirSync(targetParentDir, { recursive: true });
     }
 
     // Copy the file
-    await copyFile(sourcePath, targetPath);
+    await copyFile(file.sourcePath, file.targetPath);
 
     // Set appropriate permissions
-    const mode = getFileMode(sourceFile);
-    chmodSync(targetPath, mode);
+    const mode = getFileMode(file.sourceFile);
+    chmodSync(file.targetPath, mode);
 
-    success(`Applied: ${targetName}`);
+    success(`Applied: ${file.targetName}`);
     appliedCount++;
   }
 
@@ -865,6 +917,137 @@ async function dotsRm(targetPath: string): Promise<void> {
   console.log();
 }
 
+async function dotsPull(): Promise<void> {
+  const dotsConfig = getDotsConfig();
+  const sourceDir = expandPath(dotsConfig.sourceDir);
+
+  if (!existsSync(sourceDir)) {
+    error(`Source directory does not exist: ${sourceDir}`);
+    return;
+  }
+
+  if (!existsSync(join(sourceDir, ".git"))) {
+    error("Source directory is not a git repository");
+    return;
+  }
+
+  console.log();
+  info("Pulling changes from remote...");
+
+  try {
+    const proc = Bun.spawn(["git", "pull"], {
+      cwd: sourceDir,
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    const exitCode = await proc.exited;
+
+    console.log();
+    if (exitCode === 0) {
+      success("Pull completed");
+      info(`Run ${chalk.cyan("h dots apply")} to apply changes to home`);
+    } else {
+      error("Pull failed");
+    }
+  } catch (err) {
+    error(`Git pull failed: ${err}`);
+  }
+
+  console.log();
+}
+
+async function dotsCd(): Promise<void> {
+  const dotsConfig = getDotsConfig();
+  const sourceDir = expandPath(dotsConfig.sourceDir);
+
+  if (!existsSync(sourceDir)) {
+    error(`Source directory does not exist: ${sourceDir}`);
+    return;
+  }
+
+  // Print the directory path so shell can cd to it
+  // User should use: cd $(h dots cd)
+  console.log(sourceDir);
+}
+
+async function dotsPush(): Promise<void> {
+  const dotsConfig = getDotsConfig();
+  const sourceDir = expandPath(dotsConfig.sourceDir);
+
+  if (!existsSync(sourceDir)) {
+    error(`Source directory does not exist: ${sourceDir}`);
+    return;
+  }
+
+  if (!existsSync(join(sourceDir, ".git"))) {
+    error("Source directory is not a git repository");
+    return;
+  }
+
+  console.log();
+
+  // Check if there are changes to commit
+  const statusProc = Bun.spawn(["git", "status", "--porcelain"], {
+    cwd: sourceDir,
+    stdout: "pipe",
+  });
+  const statusOutput = await new Response(statusProc.stdout).text();
+  await statusProc.exited;
+
+  if (statusOutput.trim()) {
+    info("Uncommitted changes found, committing...");
+
+    // Stage all changes
+    const addProc = Bun.spawn(["git", "add", "-A"], { cwd: sourceDir });
+    await addProc.exited;
+
+    // Get list of changed files for commit message
+    const diffProc = Bun.spawn(["git", "diff", "--cached", "--name-only"], {
+      cwd: sourceDir,
+      stdout: "pipe",
+    });
+    const changedFiles = (await new Response(diffProc.stdout).text())
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    await diffProc.exited;
+
+    const commitMessage =
+      changedFiles.length === 1
+        ? `dots: update ${changedFiles[0]}`
+        : `dots: update ${changedFiles.length} files\n\nChanged:\n${changedFiles.map((f) => `- ${f}`).join("\n")}`;
+
+    const commitProc = Bun.spawn(["git", "commit", "-m", commitMessage], {
+      cwd: sourceDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    await commitProc.exited;
+
+    success("Changes committed");
+  } else {
+    info("No local changes to commit");
+  }
+
+  info("Pushing to remote...");
+
+  const pushProc = Bun.spawn(["git", "push"], {
+    cwd: sourceDir,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const exitCode = await pushProc.exited;
+
+  console.log();
+  if (exitCode === 0) {
+    success("Push completed");
+  } else {
+    error("Push failed");
+  }
+
+  console.log();
+}
+
 // ============== Startup Check ==============
 
 export async function checkDotfilesOnStartup(): Promise<void> {
@@ -994,5 +1177,26 @@ export function registerDotsCommands(program: Command): void {
     .description("Remove a file from dotfiles management")
     .action(async (path: string) => {
       await dotsRm(path);
+    });
+
+  dots
+    .command("pull")
+    .description("Pull changes from remote repository")
+    .action(async () => {
+      await dotsPull();
+    });
+
+  dots
+    .command("push")
+    .description("Commit and push changes to remote repository")
+    .action(async () => {
+      await dotsPush();
+    });
+
+  dots
+    .command("cd")
+    .description("Print dotfiles repo path (use: cd $(h dots cd))")
+    .action(async () => {
+      await dotsCd();
     });
 }

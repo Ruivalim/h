@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 
 
+
+## [0.6.1] - 2026-01-20
+
+## 🎉 Highlights
+
+This release significantly enhances the dotfiles management experience with new git workflow commands and an improved interactive apply process. Users can now manage their dotfiles repository directly through the CLI with pull, push, and navigation commands.
+
+## ✨ What's New
+
+### New Dotfiles Commands
+- **`h dots pull`** - Pull changes from your remote dotfiles repository
+- **`h dots push`** - Automatically commit and push local changes to remote (generates descriptive commit messages)
+- **`h dots cd`** - Print the dotfiles repo path for easy navigation (use: `cd $(h dots cd)`)
+
+### Improved Apply Workflow
+- Added upfront scanning that shows all pending changes before applying
+- New interactive file selection with checkboxes - choose exactly which files to apply
+- Clear visual indicators for new files (`+ new`) vs modified files (`~ modified`)
+- Changed default confirmation to `true` for applying changes (previously `false`)
+- Better feedback when all dotfiles are already in sync
+
+## 🔧 Technical Changes
+
+- Refactored `dotsApply()` to collect all changes first before prompting
+- Added file metadata tracking (source path, target path, new/modified status)
+- Improved diff display flow - now shows diffs only for selected modified files
+## 📝 Full Changelog
+See all changes: https://github.com/Ruivalim/h/compare/v0.6.0...v0.6.1
+
+---
+
+
 ## [0.6.0] - 2026-01-19
 
 Now I have a complete picture. Let me generate the release notes.
