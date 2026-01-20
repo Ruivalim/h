@@ -902,10 +902,11 @@ async function dotsStatus(): Promise<void> {
   }
 }
 
-async function dotsDiff(file?: string): Promise<void> {
+async function dotsDiff(file?: string, options?: { raw?: boolean }): Promise<void> {
   const dotsConfig = getDotsConfig();
   const sourceDir = expandPath(dotsConfig.sourceDir);
   const targetDir = expandPath(dotsConfig.targetDir);
+  const raw = options?.raw ?? false;
 
   if (!existsSync(sourceDir)) {
     error(`Source directory does not exist: ${sourceDir}`);
@@ -913,6 +914,27 @@ async function dotsDiff(file?: string): Promise<void> {
   }
 
   const sourceFiles = listFilesRecursively(sourceDir);
+
+  // Raw mode: just list files with status
+  if (raw) {
+    for (const sourceFile of sourceFiles) {
+      if (sourceFile.startsWith(".git/") || sourceFile === ".git") continue;
+
+      const targetName = toTargetName(sourceFile);
+      const sourcePath = join(sourceDir, sourceFile);
+      const targetPath = join(targetDir, targetName);
+
+      if (!existsSync(targetPath)) {
+        console.log(`D ${targetName}`);
+      } else {
+        const isDifferent = await filesAreDifferent(sourcePath, targetPath);
+        if (isDifferent) {
+          console.log(`M ${targetName}`);
+        }
+      }
+    }
+    return;
+  }
 
   for (const sourceFile of sourceFiles) {
     // Skip .git directory
@@ -1452,9 +1474,10 @@ export function registerDotsCommands(program: Command): void {
   dots
     .command("diff")
     .argument("[file]", "Specific file to diff")
+    .option("--raw", "Output raw list with M (modified) and D (deleted) prefixes")
     .description("Show differences between repo and home")
-    .action(async (file?: string) => {
-      await dotsDiff(file);
+    .action(async (file?: string, opts?: { raw?: boolean }) => {
+      await dotsDiff(file, opts);
     });
 
   dots
