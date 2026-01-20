@@ -20,6 +20,7 @@ export interface HConfig {
     autoPush: boolean;
     checkInterval: number; // hours, 0 = disabled
     lastChecked?: string; // ISO timestamp
+    diffTool?: string; // vimdiff, meld, opendiff, code
   };
 }
 

@@ -157,9 +157,11 @@ async function configureDots(cfg: HConfig): Promise<void> {
     ],
     autoPush: false,
     checkInterval: 24,
+    diffTool: undefined,
   };
 
   const checkIntervalLabel = dots.checkInterval === 0 ? "disabled" : `every ${dots.checkInterval}h`;
+  const diffToolLabel = dots.diffTool || "auto-detect";
 
   const action = await select({
     message: "What would you like to configure?",
@@ -171,6 +173,10 @@ async function configureDots(cfg: HConfig): Promise<void> {
       {
         name: `Sync check ${chalk.gray(`(${checkIntervalLabel})`)}`,
         value: "checkInterval",
+      },
+      {
+        name: `Diff tool ${chalk.gray(`(${diffToolLabel})`)}`,
+        value: "diffTool",
       },
       {
         name: `Source directory ${chalk.gray(`(${dots.sourceDir})`)}`,
@@ -247,6 +253,38 @@ async function configureDots(cfg: HConfig): Promise<void> {
     } else {
       success(`Sync check: every ${checkInterval} hours`);
     }
+  } else if (action === "diffTool") {
+    const toolChoice = await select({
+      message: "Select diff/merge tool:",
+      choices: [
+        { name: "Auto-detect", value: "" },
+        { name: "vimdiff (vim)", value: "vimdiff" },
+        { name: "nvim -d (neovim)", value: "nvim -d" },
+        { name: "meld", value: "meld" },
+        { name: "opendiff (macOS FileMerge)", value: "opendiff" },
+        { name: "VS Code", value: "code --diff --wait" },
+        { name: "Custom...", value: "custom" },
+      ],
+      default: dots.diffTool || "",
+    });
+
+    let diffTool: string | undefined = toolChoice || undefined;
+
+    if (toolChoice === "custom") {
+      const customTool = await input({
+        message: "Enter diff command (e.g., 'meld' or 'code --diff --wait'):",
+        default: dots.diffTool || "",
+      });
+      diffTool = customTool.trim() || undefined;
+    }
+
+    const newConfig: HConfig = {
+      ...cfg,
+      dots: { ...dots, diffTool },
+    };
+    saveConfig(newConfig);
+    console.log();
+    success(`Diff tool: ${diffTool || "auto-detect"}`);
   } else if (action === "sourceDir") {
     const sourceDir = await input({
       message: "Source directory (dotfiles repo):",

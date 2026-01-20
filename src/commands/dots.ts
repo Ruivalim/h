@@ -118,6 +118,48 @@ async function gitCommitAndPush(sourceDir: string, options: GitCommitOptions): P
   }
 }
 
+// Detect default diff tool based on environment
+function detectDefaultDiffTool(): string {
+  const editor = process.env.EDITOR || "";
+  if (editor.includes("nvim")) return "nvim -d";
+  if (editor.includes("vim")) return "vimdiff";
+  if (process.platform === "darwin") return "opendiff";
+  return "vimdiff";
+}
+
+// Get command args for diff tool
+function getDiffToolArgs(tool: string, file1: string, file2: string): string[] {
+  // Handle tools with multiple args like "code --diff --wait"
+  const parts = tool.split(" ");
+  const cmd = parts[0];
+  const args = parts.slice(1);
+
+  if (cmd === "code") {
+    // VS Code needs special handling
+    return ["code", "--diff", file1, file2, "--wait"];
+  }
+
+  return [...parts, file1, file2];
+}
+
+// Open external diff tool
+async function openExternalDiff(file1: string, file2: string): Promise<void> {
+  const dotsConfig = getDotsConfig();
+  const tool = dotsConfig.diffTool || detectDefaultDiffTool();
+
+  info(`Opening in ${tool}...`);
+
+  const args = getDiffToolArgs(tool, file1, file2);
+
+  const proc = Bun.spawn(args, {
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+
+  await proc.exited;
+}
+
 // Convert target path to source name (chezmoi format)
 // .zshrc -> dot_zshrc
 // .config/nvim -> dot_config/nvim
@@ -320,23 +362,31 @@ async function dotsAdd(targetPath: string): Promise<void> {
   const dotsConfig = getDotsConfig();
   const sourceDir = expandPath(dotsConfig.sourceDir);
   const targetDir = expandPath(dotsConfig.targetDir);
-  const expandedTarget = expandPath(targetPath);
+  const home = process.env.HOME || "";
 
-  // Make path relative to targetDir
-  let relativeTarget = targetPath;
-  if (expandedTarget.startsWith(targetDir)) {
-    relativeTarget = relative(targetDir, expandedTarget);
-  } else if (expandedTarget.startsWith(process.env.HOME || "")) {
-    relativeTarget = relative(process.env.HOME || "", expandedTarget);
+  // Resolve to absolute path first
+  let absoluteTarget = expandPath(targetPath);
+  if (!absoluteTarget.startsWith("/")) {
+    // Relative path - resolve from current directory
+    absoluteTarget = join(process.cwd(), targetPath);
   }
 
-  // Check if path exists
-  if (!existsSync(expandedTarget)) {
-    error(`Path does not exist: ${expandedTarget}`);
+  // Make path relative to home directory
+  let relativeTarget: string;
+  if (absoluteTarget.startsWith(home)) {
+    relativeTarget = relative(home, absoluteTarget);
+  } else {
+    error(`Path must be inside home directory: ${absoluteTarget}`);
     return;
   }
 
-  const stat = statSync(expandedTarget);
+  // Check if path exists
+  if (!existsSync(absoluteTarget)) {
+    error(`Path does not exist: ${absoluteTarget}`);
+    return;
+  }
+
+  const stat = statSync(absoluteTarget);
 
   if (stat.isFile()) {
     // Single file
@@ -366,7 +416,7 @@ async function dotsAdd(targetPath: string): Promise<void> {
     }
 
     // Copy the file
-    await copyFile(expandedTarget, sourcePath);
+    await copyFile(absoluteTarget, sourcePath);
 
     // Set appropriate permissions on source
     const mode = getFileMode(sourceName);
@@ -387,7 +437,7 @@ async function dotsAdd(targetPath: string): Promise<void> {
     info(`Adding directory: ${relativeTarget}`);
     console.log();
 
-    const allFiles = listFilesRecursively(expandedTarget);
+    const allFiles = listFilesRecursively(absoluteTarget);
     const filteredFiles = allFiles.filter((f) => !shouldIgnore(f, dotsConfig.ignoredPatterns));
 
     if (filteredFiles.length === 0) {
@@ -413,7 +463,7 @@ async function dotsAdd(targetPath: string): Promise<void> {
     console.log();
 
     for (const file of selectedFiles) {
-      const fullTargetPath = join(expandedTarget, file);
+      const fullTargetPath = join(absoluteTarget, file);
       const fullRelativePath = join(relativeTarget, file);
       const fileStat = statSync(fullTargetPath);
 
@@ -535,35 +585,57 @@ async function dotsApply(): Promise<void> {
 
   console.log();
   let appliedCount = 0;
+  let skippedCount = filesToApply.length - selectedFiles.length;
 
   for (const file of filesToApply) {
     if (!selectedFiles.includes(file.targetName)) continue;
 
-    // Show diff for modified files before applying
+    // Show menu for modified files before applying
     if (!file.isNew) {
-      const sourceContent = await readFile(file.sourcePath);
-      const targetContent = await readFile(file.targetPath);
+      console.log(chalk.yellow(`\nFile modified: ${file.targetName}`));
 
-      console.log(chalk.yellow(`\nFile: ${file.targetName}`));
-      console.log(
-        generateDiff(
-          targetContent,
-          sourceContent,
-          `~/${file.targetName} (current)`,
-          `repo/${file.sourceFile}`
-        )
-      );
-      console.log();
+      let shouldApply = false;
+      let done = false;
 
-      const shouldOverwrite = await confirm({
-        message: `Apply changes to ~/${file.targetName}?`,
-        default: true,
-      });
+      while (!done) {
+        const action = await select({
+          message: "How do you want to resolve?",
+          choices: [
+            { name: "View inline diff", value: "inline" },
+            { name: "Open in diff tool", value: "difftool" },
+            { name: "Apply repo → home (overwrite local)", value: "apply" },
+            { name: "Skip", value: "skip" },
+          ],
+        });
 
-      if (!shouldOverwrite) {
-        info(`Skipped: ${file.targetName}`);
-        continue;
+        if (action === "inline") {
+          const sourceContent = await readFile(file.sourcePath);
+          const targetContent = await readFile(file.targetPath);
+          console.log();
+          console.log(
+            generateDiff(
+              targetContent,
+              sourceContent,
+              `~/${file.targetName} (current)`,
+              `repo/${file.sourceFile}`
+            )
+          );
+          console.log();
+          // Loop back to menu
+        } else if (action === "difftool") {
+          await openExternalDiff(file.targetPath, file.sourcePath);
+          // Loop back to menu after closing diff tool
+        } else if (action === "apply") {
+          shouldApply = true;
+          done = true;
+        } else if (action === "skip") {
+          info(`Skipped: ${file.targetName}`);
+          skippedCount++;
+          done = true;
+        }
       }
+
+      if (!shouldApply) continue;
     }
 
     // Create parent directories if needed
@@ -642,40 +714,55 @@ async function dotsSync(): Promise<void> {
     const isDifferent = await filesAreDifferent(sourcePath, targetPath);
 
     if (isDifferent) {
-      const sourceContent = await readFile(sourcePath);
-      const targetContent = await readFile(targetPath);
-
       console.log(chalk.yellow(`\nFile modified: ${targetName}`));
-      console.log(
-        generateDiff(
-          sourceContent,
-          targetContent,
-          `repo/${sourceFile}`,
-          `~/${targetName} (current)`
-        )
-      );
-      console.log();
 
-      const direction = await select({
-        message: "Sync direction:",
-        choices: [
-          { name: "home -> repo (update repo with local changes)", value: "to-repo" },
-          { name: "repo -> home (restore from repo)", value: "to-home" },
-          { name: "Skip", value: "skip" },
-        ],
-      });
+      let done = false;
 
-      if (direction === "to-repo") {
-        await copyFile(targetPath, sourcePath);
-        success(`Updated repo: ${sourceFile}`);
-        syncedCount++;
-        updatedFiles.push(targetName);
-      } else if (direction === "to-home") {
-        await copyFile(sourcePath, targetPath);
-        const mode = getFileMode(sourceFile);
-        chmodSync(targetPath, mode);
-        success(`Restored: ${targetName}`);
-        syncedCount++;
+      while (!done) {
+        const action = await select({
+          message: "How do you want to resolve?",
+          choices: [
+            { name: "View inline diff", value: "inline" },
+            { name: "Open in diff tool", value: "difftool" },
+            { name: "home → repo (update repo)", value: "to-repo" },
+            { name: "repo → home (restore local)", value: "to-home" },
+            { name: "Skip", value: "skip" },
+          ],
+        });
+
+        if (action === "inline") {
+          const sourceContent = await readFile(sourcePath);
+          const targetContent = await readFile(targetPath);
+          console.log();
+          console.log(
+            generateDiff(
+              sourceContent,
+              targetContent,
+              `repo/${sourceFile}`,
+              `~/${targetName} (current)`
+            )
+          );
+          console.log();
+          // Loop back to menu
+        } else if (action === "difftool") {
+          await openExternalDiff(sourcePath, targetPath);
+          // Loop back to menu after closing diff tool
+        } else if (action === "to-repo") {
+          await copyFile(targetPath, sourcePath);
+          success(`Updated repo: ${sourceFile}`);
+          syncedCount++;
+          updatedFiles.push(targetName);
+          done = true;
+        } else if (action === "to-home") {
+          await copyFile(sourcePath, targetPath);
+          const mode = getFileMode(sourceFile);
+          chmodSync(targetPath, mode);
+          success(`Restored: ${targetName}`);
+          syncedCount++;
+          done = true;
+        } else if (action === "skip") {
+          done = true;
+        }
       }
     }
   }
@@ -799,13 +886,43 @@ async function dotsDiff(file?: string): Promise<void> {
     const isDifferent = await filesAreDifferent(sourcePath, targetPath);
 
     if (isDifferent) {
-      const sourceContent = await readFile(sourcePath);
-      const targetContent = await readFile(targetPath);
+      console.log(chalk.bold(`\n${targetName}: modified`));
 
-      console.log(chalk.bold(`\n${targetName}:`));
-      console.log(
-        generateDiff(sourceContent, targetContent, `repo/${sourceFile}`, `~/${targetName}`)
-      );
+      // If specific file requested, show menu
+      if (file) {
+        let done = false;
+        while (!done) {
+          const action = await select({
+            message: "View diff:",
+            choices: [
+              { name: "Inline diff (terminal)", value: "inline" },
+              { name: "Open in diff tool", value: "difftool" },
+              { name: "Done", value: "done" },
+            ],
+          });
+
+          if (action === "inline") {
+            const sourceContent = await readFile(sourcePath);
+            const targetContent = await readFile(targetPath);
+            console.log();
+            console.log(
+              generateDiff(sourceContent, targetContent, `repo/${sourceFile}`, `~/${targetName}`)
+            );
+            console.log();
+          } else if (action === "difftool") {
+            await openExternalDiff(sourcePath, targetPath);
+          } else {
+            done = true;
+          }
+        }
+      } else {
+        // For listing all diffs, just show inline
+        const sourceContent = await readFile(sourcePath);
+        const targetContent = await readFile(targetPath);
+        console.log(
+          generateDiff(sourceContent, targetContent, `repo/${sourceFile}`, `~/${targetName}`)
+        );
+      }
     } else if (file) {
       // Only show "in sync" message if specific file was requested
       success(`${targetName}: in sync`);
@@ -861,15 +978,21 @@ async function dotsList(): Promise<void> {
 async function dotsRm(targetPath: string): Promise<void> {
   const dotsConfig = getDotsConfig();
   const sourceDir = expandPath(dotsConfig.sourceDir);
-  const targetDir = expandPath(dotsConfig.targetDir);
-  const expandedTarget = expandPath(targetPath);
+  const home = process.env.HOME || "";
 
-  // Make path relative to targetDir
-  let relativeTarget = targetPath;
-  if (expandedTarget.startsWith(targetDir)) {
-    relativeTarget = relative(targetDir, expandedTarget);
-  } else if (expandedTarget.startsWith(process.env.HOME || "")) {
-    relativeTarget = relative(process.env.HOME || "", expandedTarget);
+  // Resolve to absolute path first
+  let absoluteTarget = expandPath(targetPath);
+  if (!absoluteTarget.startsWith("/")) {
+    absoluteTarget = join(process.cwd(), targetPath);
+  }
+
+  // Make path relative to home directory
+  let relativeTarget: string;
+  if (absoluteTarget.startsWith(home)) {
+    relativeTarget = relative(home, absoluteTarget);
+  } else {
+    error(`Path must be inside home directory: ${absoluteTarget}`);
+    return;
   }
 
   // Find the corresponding source file
