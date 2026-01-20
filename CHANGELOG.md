@@ -6,6 +6,33 @@ All notable changes to this project will be documented in this file.
 
 
 
+
+## [0.6.3] - 2026-01-20
+
+## 🎉 Highlights
+
+This release introduces the `re-add` command for dotfiles management, making it easier to sync modified local files back to your dotfiles repository. Additionally, all interactive prompts now handle Ctrl+C gracefully, providing a cleaner user experience when cancelling operations.
+
+## ✨ What's New
+
+### Dotfiles Management
+- **New `re-add` command**: Quickly sync modified local dotfiles back to your repository with `h dots re-add` (or `h dots readd`). The command scans for locally modified files, lets you select which ones to update, and automatically commits and pushes changes.
+- **Improved Ctrl+C handling**: All interactive prompts (confirmations, checkboxes, selects) now exit gracefully when interrupted, instead of throwing unhandled errors.
+
+### Shell Completions
+- **Zsh completions for dots commands**: Full autocompletion support for all `h dots` subcommands including the new `re-add` command. File path completion is now available for `dots add` and `dots rm` commands.
+
+## 🔧 Technical Changes
+
+- Added `isExitError()` and `exitGracefully()` helper functions to standardize prompt interruption handling across all interactive operations
+- Wrapped all `@inquirer/prompts` calls (`confirm`, `checkbox`, `select`) in try-catch blocks for consistent error handling
+- Extended zsh completion script with `dots_subcommands` array and proper case handling for nested commands
+## 📝 Full Changelog
+See all changes: https://github.com/Ruivalim/h/compare/v0.6.2...v0.6.3
+
+---
+
+
 ## [0.6.2] - 2026-01-20
 
 ## 🎉 Highlights
