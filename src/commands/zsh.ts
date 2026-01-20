@@ -196,6 +196,7 @@ _h() {
   local -a commands
   local -a k_subcommands
   local -a z_subcommands
+  local -a dots_subcommands
 
   commands=(
     'k:Kubectl helpers'
@@ -208,6 +209,7 @@ _h() {
     'branch-diff:Generate diff report between branches with AI'
     'unquarantine:Remove macOS quarantine from app'
     'z:Zsh config manager'
+    'dots:Manage dotfiles (chezmoi-compatible)'
     'release:Release a new version with hooks'
     'upgrade:Upgrade h CLI to latest version'
     'update:Upgrade h CLI to latest version'
@@ -233,12 +235,38 @@ _h() {
     'autocomplete:Setup zsh autocompletions'
   )
 
+  dots_subcommands=(
+    'add:Add file or directory to dotfiles repo'
+    'apply:Apply dotfiles from repo to home'
+    'sync:Sync dotfiles bidirectionally'
+    'status:Show status of dotfiles'
+    'diff:Show differences between repo and home'
+    'list:List managed dotfiles'
+    'ls:List managed dotfiles'
+    'rm:Remove file from dotfiles management'
+    'pull:Pull changes from remote'
+    'push:Commit and push to remote'
+    'cd:Print dotfiles repo path'
+    're-add:Re-add modified local files to repo'
+    'readd:Re-add modified local files to repo'
+  )
+
   case "$words[2]" in
     k)
       _describe 'k subcommand' k_subcommands
       ;;
     z)
       _describe 'z subcommand' z_subcommands
+      ;;
+    dots)
+      case "$words[3]" in
+        add|rm)
+          _files
+          ;;
+        *)
+          _describe 'dots subcommand' dots_subcommands
+          ;;
+      esac
       ;;
     *)
       _describe 'command' commands

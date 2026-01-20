@@ -6,6 +6,16 @@ import { existsSync, statSync, readdirSync, mkdirSync, chmodSync } from "fs";
 import { join, relative, dirname, basename } from "path";
 import chalk from "chalk";
 
+// Helper to handle graceful exit on Ctrl+C
+function isExitError(err: unknown): boolean {
+  return err instanceof Error && err.name === "ExitPromptError";
+}
+
+function exitGracefully(): never {
+  console.log();
+  process.exit(0);
+}
+
 // Helper to expand ~ in paths
 function expandPath(path: string): string {
   if (path.startsWith("~")) {
@@ -393,18 +403,26 @@ async function dotsAdd(targetPath: string): Promise<void> {
     console.log();
     info(`Adding file: ${relativeTarget}`);
 
-    const isPrivate = await confirm({
-      message: "Is this file private? (sets permissions to 600)",
-      default:
-        relativeTarget.includes(".ssh") ||
-        relativeTarget.includes("secret") ||
-        relativeTarget.includes("credential"),
-    });
+    let isPrivate: boolean;
+    let isExecutable: boolean;
 
-    const isExecutable = await confirm({
-      message: "Is this file executable?",
-      default: stat.mode & 0o111 ? true : false,
-    });
+    try {
+      isPrivate = await confirm({
+        message: "Is this file private? (sets permissions to 600)",
+        default:
+          relativeTarget.includes(".ssh") ||
+          relativeTarget.includes("secret") ||
+          relativeTarget.includes("credential"),
+      });
+
+      isExecutable = await confirm({
+        message: "Is this file executable?",
+        default: stat.mode & 0o111 ? true : false,
+      });
+    } catch (err) {
+      if (isExitError(err)) exitGracefully();
+      throw err;
+    }
 
     const sourceName = toSourceName(relativeTarget, isPrivate, isExecutable);
     const sourcePath = join(sourceDir, sourceName);
@@ -445,15 +463,21 @@ async function dotsAdd(targetPath: string): Promise<void> {
       return;
     }
 
-    const selectedFiles = await checkbox({
-      message: "Select files to add:",
-      choices: filteredFiles.map((f) => ({
-        name: f,
-        value: f,
-        checked: true,
-      })),
-      pageSize: 20,
-    });
+    let selectedFiles: string[];
+    try {
+      selectedFiles = await checkbox({
+        message: "Select files to add:",
+        choices: filteredFiles.map((f) => ({
+          name: f,
+          value: f,
+          checked: true,
+        })),
+        pageSize: 20,
+      });
+    } catch (err) {
+      if (isExitError(err)) exitGracefully();
+      throw err;
+    }
 
     if (selectedFiles.length === 0) {
       info("No files selected");
@@ -567,15 +591,21 @@ async function dotsApply(): Promise<void> {
   console.log();
 
   // Let user select which files to apply
-  const selectedFiles = await checkbox({
-    message: "Select files to apply:",
-    choices: filesToApply.map((f) => ({
-      name: `${f.isNew ? "(new)" : "(modified)"} ${f.targetName}`,
-      value: f.targetName,
-      checked: true,
-    })),
-    pageSize: 15,
-  });
+  let selectedFiles: string[];
+  try {
+    selectedFiles = await checkbox({
+      message: "Select files to apply:",
+      choices: filesToApply.map((f) => ({
+        name: `${f.isNew ? "(new)" : "(modified)"} ${f.targetName}`,
+        value: f.targetName,
+        checked: true,
+      })),
+      pageSize: 15,
+    });
+  } catch (err) {
+    if (isExitError(err)) exitGracefully();
+    throw err;
+  }
 
   if (selectedFiles.length === 0) {
     info("No files selected");
@@ -598,15 +628,21 @@ async function dotsApply(): Promise<void> {
       let done = false;
 
       while (!done) {
-        const action = await select({
-          message: "How do you want to resolve?",
-          choices: [
-            { name: "View inline diff", value: "inline" },
-            { name: "Open in diff tool", value: "difftool" },
-            { name: "Apply repo → home (overwrite local)", value: "apply" },
-            { name: "Skip", value: "skip" },
-          ],
-        });
+        let action: string;
+        try {
+          action = await select({
+            message: "How do you want to resolve?",
+            choices: [
+              { name: "View inline diff", value: "inline" },
+              { name: "Open in diff tool", value: "difftool" },
+              { name: "Apply repo → home (overwrite local)", value: "apply" },
+              { name: "Skip", value: "skip" },
+            ],
+          });
+        } catch (err) {
+          if (isExitError(err)) exitGracefully();
+          throw err;
+        }
 
         if (action === "inline") {
           const sourceContent = await readFile(file.sourcePath);
@@ -692,10 +728,16 @@ async function dotsSync(): Promise<void> {
     if (!existsSync(targetPath)) {
       console.log(chalk.yellow(`\nFile removed from home: ${targetName}`));
 
-      const shouldDelete = await confirm({
-        message: `Delete ${sourceFile} from repo?`,
-        default: false,
-      });
+      let shouldDelete: boolean;
+      try {
+        shouldDelete = await confirm({
+          message: `Delete ${sourceFile} from repo?`,
+          default: false,
+        });
+      } catch (err) {
+        if (isExitError(err)) exitGracefully();
+        throw err;
+      }
 
       if (shouldDelete) {
         const file = Bun.file(sourcePath);
@@ -719,16 +761,22 @@ async function dotsSync(): Promise<void> {
       let done = false;
 
       while (!done) {
-        const action = await select({
-          message: "How do you want to resolve?",
-          choices: [
-            { name: "View inline diff", value: "inline" },
-            { name: "Open in diff tool", value: "difftool" },
-            { name: "home → repo (update repo)", value: "to-repo" },
-            { name: "repo → home (restore local)", value: "to-home" },
-            { name: "Skip", value: "skip" },
-          ],
-        });
+        let action: string;
+        try {
+          action = await select({
+            message: "How do you want to resolve?",
+            choices: [
+              { name: "View inline diff", value: "inline" },
+              { name: "Open in diff tool", value: "difftool" },
+              { name: "home → repo (update repo)", value: "to-repo" },
+              { name: "repo → home (restore local)", value: "to-home" },
+              { name: "Skip", value: "skip" },
+            ],
+          });
+        } catch (err) {
+          if (isExitError(err)) exitGracefully();
+          throw err;
+        }
 
         if (action === "inline") {
           const sourceContent = await readFile(sourcePath);
@@ -892,14 +940,20 @@ async function dotsDiff(file?: string): Promise<void> {
       if (file) {
         let done = false;
         while (!done) {
-          const action = await select({
-            message: "View diff:",
-            choices: [
-              { name: "Inline diff (terminal)", value: "inline" },
-              { name: "Open in diff tool", value: "difftool" },
-              { name: "Done", value: "done" },
-            ],
-          });
+          let action: string;
+          try {
+            action = await select({
+              message: "View diff:",
+              choices: [
+                { name: "Inline diff (terminal)", value: "inline" },
+                { name: "Open in diff tool", value: "difftool" },
+                { name: "Done", value: "done" },
+              ],
+            });
+          } catch (err) {
+            if (isExitError(err)) exitGracefully();
+            throw err;
+          }
 
           if (action === "inline") {
             const sourceContent = await readFile(sourcePath);
@@ -1015,10 +1069,16 @@ async function dotsRm(targetPath: string): Promise<void> {
   const sourcePath = join(sourceDir, foundSource);
 
   console.log();
-  const confirmed = await confirm({
-    message: `Remove ${foundSource} from dotfiles repo?`,
-    default: false,
-  });
+  let confirmed: boolean;
+  try {
+    confirmed = await confirm({
+      message: `Remove ${foundSource} from dotfiles repo?`,
+      default: false,
+    });
+  } catch (err) {
+    if (isExitError(err)) exitGracefully();
+    throw err;
+  }
 
   if (!confirmed) {
     info("Cancelled");
@@ -1166,6 +1226,117 @@ async function dotsPush(): Promise<void> {
     success("Push completed");
   } else {
     error("Push failed");
+  }
+
+  console.log();
+}
+
+async function dotsReAdd(): Promise<void> {
+  const dotsConfig = getDotsConfig();
+  const sourceDir = expandPath(dotsConfig.sourceDir);
+  const targetDir = expandPath(dotsConfig.targetDir);
+
+  if (!existsSync(sourceDir)) {
+    error(`Source directory does not exist: ${sourceDir}`);
+    info("Run 'h dots add' to add some files first");
+    return;
+  }
+
+  console.log();
+  info("Scanning for modified local files...");
+
+  const sourceFiles = listFilesRecursively(sourceDir);
+
+  // Collect files that are modified locally
+  const modifiedFiles: Array<{
+    sourceFile: string;
+    targetName: string;
+    sourcePath: string;
+    targetPath: string;
+  }> = [];
+
+  for (const sourceFile of sourceFiles) {
+    if (sourceFile.startsWith(".git/") || sourceFile === ".git") continue;
+
+    const targetName = toTargetName(sourceFile);
+    const sourcePath = join(sourceDir, sourceFile);
+    const targetPath = join(targetDir, targetName);
+
+    // Only include files that exist locally and are different
+    if (existsSync(targetPath)) {
+      const isDifferent = await filesAreDifferent(sourcePath, targetPath);
+      if (isDifferent) {
+        modifiedFiles.push({
+          sourceFile,
+          targetName,
+          sourcePath,
+          targetPath,
+        });
+      }
+    }
+  }
+
+  if (modifiedFiles.length === 0) {
+    console.log();
+    success("All dotfiles are already in sync!");
+    console.log();
+    return;
+  }
+
+  console.log();
+  console.log(chalk.bold(`Found ${modifiedFiles.length} modified local file(s):`));
+  console.log();
+
+  for (const file of modifiedFiles) {
+    console.log(`  ${chalk.yellow("~")}  ${file.targetName}`);
+  }
+  console.log();
+
+  // Let user select which files to re-add
+  let selectedFiles: string[];
+  try {
+    selectedFiles = await checkbox({
+      message: "Select files to re-add to repo (home → repo):",
+      choices: modifiedFiles.map((f) => ({
+        name: f.targetName,
+        value: f.targetName,
+        checked: true,
+      })),
+      pageSize: 15,
+    });
+  } catch (err) {
+    if (isExitError(err)) exitGracefully();
+    throw err;
+  }
+
+  if (selectedFiles.length === 0) {
+    info("No files selected");
+    console.log();
+    return;
+  }
+
+  console.log();
+  const reAddedFiles: string[] = [];
+
+  for (const file of modifiedFiles) {
+    if (!selectedFiles.includes(file.targetName)) continue;
+
+    // Copy from home to repo
+    await copyFile(file.targetPath, file.sourcePath);
+    success(`Re-added: ${file.targetName}`);
+    reAddedFiles.push(file.targetName);
+  }
+
+  console.log();
+  info(`Re-added ${reAddedFiles.length} file(s) to repo`);
+
+  // Auto-push if enabled
+  if (reAddedFiles.length > 0) {
+    await gitCommitAndPush(sourceDir, {
+      action: "sync",
+      files: reAddedFiles,
+      updatedFiles: reAddedFiles,
+    });
   }
 
   console.log();
@@ -1321,5 +1492,13 @@ export function registerDotsCommands(program: Command): void {
     .description("Print dotfiles repo path (use: cd $(h dots cd))")
     .action(async () => {
       await dotsCd();
+    });
+
+  dots
+    .command("re-add")
+    .alias("readd")
+    .description("Re-add modified local files to repo (home → repo)")
+    .action(async () => {
+      await dotsReAdd();
     });
 }
